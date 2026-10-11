@@ -1,19 +1,18 @@
-# AI RJ — Personalized AI Radio Jockey
+# MyRJ — Personalized AI Radio Jockey
 
-A web app where every user gets their own AI Radio Jockey.
+Your own AI Radio Jockey that actually knows you.
 
-The RJ:
-- Speaks in a voice and energy you choose (via ElevenLabs)
-- Plays music from your Spotify playlists and history
-- Shares only the news and topics you care about
-- Cracks jokes matching your sense of humor
+**MyRJ** speaks in the voice and energy you want, plays music from your taste (Spotify + others), shares only the news you care about, and cracks jokes matching your humor style.
+
+Supported languages: **Hindi, English, Hinglish, Marathi**
 
 ## Tech Stack
 - **Frontend**: Next.js (App Router) + Tailwind
 - **Auth & Database**: Supabase
-- **Music**: Spotify Web API + Web Playback SDK
+- **Music**: Spotify Web API + Web Playback SDK (plus playlist links / screenshots for other services)
 - **Voice**: ElevenLabs
-- **Script Generation**: LLM (Grok preferred)
+- **Script Generation**: LLM
+- **Deploy**: Vercel
 
 ## Getting Started
 
@@ -23,12 +22,12 @@ The RJ:
 4. `npm run dev`
 
 ## Status
-Early scaffolding. Building the core personalization + radio experience.
+Early scaffolding. Waiting on API keys to wire up live features.
 
 ## Roadmap
-- [ ] User auth + profile
+- [ ] User auth + full profile (music, interests, humor, voice, language)
 - [ ] Spotify connect
-- [ ] ElevenLabs voice generation
+- [ ] ElevenLabs voice generation (Hindi / English / Hinglish / Marathi)
 - [ ] RJ script engine
 - [ ] Music + voice mixing player
-- [ ] Shareable public version
+- [ ] Public shareable version on Vercel
