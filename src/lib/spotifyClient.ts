@@ -7,6 +7,12 @@ export async function getToken(): Promise<string | null> {
   return (await r.json()).accessToken ?? null;
 }
 
+export async function getTokenInfo(): Promise<{ accessToken: string; scope: string | null } | null> {
+  const r = await fetch("/api/spotify/token", { cache: "no-store" });
+  if (!r.ok) return null;
+  return r.json();
+}
+
 export async function sp<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
   const token = await getToken();
   if (!token) throw new Error("Spotify not connected");

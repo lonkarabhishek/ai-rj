@@ -14,6 +14,7 @@ export async function GET(req: NextRequest) {
     const res = NextResponse.redirect(`${origin}/settings?spotify=connected`);
     res.cookies.delete("sp_state");
     res.cookies.set("sp_at", t.access_token, { ...cookieOpts(), maxAge: t.expires_in - 60 });
+    res.cookies.set("sp_scope", (t as { scope?: string }).scope ?? "", { ...cookieOpts(), maxAge: 60 * 60 * 24 * 60 });
     if (t.refresh_token) res.cookies.set("sp_rt", t.refresh_token, { ...cookieOpts(), maxAge: 60 * 60 * 24 * 60 });
     return res;
   } catch {

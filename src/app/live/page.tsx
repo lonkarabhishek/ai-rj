@@ -3,11 +3,13 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { loadPrefs, MODES, type ListenMode, type Prefs, type TrackInfo } from "@/lib/prefs";
-import { Curator, getMe, getToken, sp } from "@/lib/spotifyClient";
+import { Curator, getMe, getToken, getTokenInfo, sp } from "@/lib/spotifyClient";
 
 declare global { interface Window { Spotify: any; onSpotifyWebPlaybackSDKReady: () => void } }
 
-type Out = "sdk" | "preview" | "none";
+type Out = "sdk" | "connect" | "preview" | "none";
+const NEEDED = ["streaming", "user-modify-playback-state", "user-read-playback-state"];
+interface Diag { account?: string; product?: string; scopes?: string; sdk?: string; device?: string; output?: string; error?: string }
 type Phase = "idle" | "tuning" | "rj" | "song" | "waiting";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const SONG_VOL = 0.85;
@@ -34,6 +36,13 @@ export default function Live() {
   const [upNext, setUpNext] = useState<TrackInfo | null>(null);
   const [progress, setProgress] = useState(0);
   const [out, setOut] = useState<Out>("none");
+  const [diag, setDiagState] = useState<Diag>({});
+  const [showDiag, setShowDiag] = useState(false);
+  const [needReconnect, setNeedReconnect] = useState(false);
+  const diagRef = useRef<Diag>({});
+  const setDiag = (d: Partial<Diag>) => { diagRef.current = { ...diagRef.current, ...d }; setDiagState(diagRef.current); };
+  const connectDeviceRef = useRef<string | null>(null);
+  const sdkErrRef = useRef<string | null>(null);
 
   const stopRef = useRef(false);
   const skipRef = useRef<() => void>(() => {});
@@ -46,6 +55,22 @@ export default function Live() {
 
   useEffect(() => {
     setPrefs(loadPrefs());
+    // Preload the SDK and create the player early so Go Live can activate it inside the tap gesture.
+    getTokenInfo().then(async (ti) => {
+      if (!ti) { setDiag({ account: "not connected" }); return; }
+      const sc = ti.scope;
+      setDiag({ scopes: sc === null ? "unknown (connected before scope tracking)" : sc ? "ok" : "none" });
+      if (sc !== null && NEEDED.some((n) => !sc.split(" ").includes(n))) { setNeedReconnect(true); setDiag({ scopes: "missing: " + NEEDED.filter((n) => !sc.split(" ").includes(n)).join(", ") }); }
+      try {
+        setDiag({ sdk: "loading" });
+        await Promise.race([loadSdk(), sleep(10000).then(() => { throw new Error("SDK script timed out"); })]);
+        const player = new window.Spotify.Player({ name: "MyRJ Web Player", getOAuthToken: async (cb: (t: string) => void) => cb((await getToken()) ?? ""), volume: SONG_VOL });
+        ["account_error", "authentication_error", "initialization_error", "playback_error"].forEach((e) =>
+          player.addListener(e, ({ message }: any) => { sdkErrRef.current = `${e}: ${message}`; setDiag({ sdk: `${e}: ${message}` }); }));
+        playerRef.current = player;
+        setDiag({ sdk: "loaded" });
+      } catch (e) { sdkErrRef.current = String(e); setDiag({ sdk: String(e) }); }
+    });
     return () => { stopRef.current = true; playerRef.current?.disconnect(); audioRef.current?.pause(); };
   }, []);
 
@@ -102,32 +127,113 @@ export default function Live() {
   }
 
   // ---------- spotify ----------
-  async function setupSpotify(): Promise<Out> {
+  async function findConnectDevice(): Promise<string | null> {
     try {
-      const me = await getMe();
-      if (me.product !== "premium") return "preview";
-      await loadSdk();
-      const player = new window.Spotify.Player({ name: "MyRJ", getOAuthToken: async (cb: (t: string) => void) => cb((await getToken()) ?? ""), volume: SONG_VOL });
-      playerRef.current = player;
+      const j = await sp<any>("/me/player/devices");
+      const devs = (j.devices ?? []).filter((d: any) => !d.is_restricted && d.id !== deviceRef.current);
+      const d = devs.find((x: any) => x.is_active) ?? devs.find((x: any) => x.type === "Smartphone") ?? devs[0];
+      if (d) setDiag({ device: `${d.name} (${d.type}, Spotify Connect)` });
+      return d?.id ?? null;
+    } catch (e) { setDiag({ error: String(e) }); return null; }
+  }
+
+  async function setupSpotify(): Promise<Out> {
+    let me;
+    try { me = await getMe(); } catch (e) { setDiag({ account: "not connected", error: String(e) }); return "none"; }
+    setDiag({ account: me.display_name, product: me.product });
+    if (me.product !== "premium") {
+      setDiag({ output: "previews only (Spotify Free: Spotify blocks full playback control)" });
+      return "preview";
+    }
+    // 1) In-browser player (desktop browsers; Spotify's SDK does not support mobile browsers)
+    const player = playerRef.current;
+    if (player && !sdkErrRef.current) {
+      setDiag({ sdk: "connecting" });
       const id = await new Promise<string | null>((res) => {
         player.addListener("ready", ({ device_id }: any) => res(device_id));
-        ["account_error", "authentication_error", "initialization_error"].forEach((e) => player.addListener(e, () => res(null)));
-        player.connect();
-        setTimeout(() => res(null), 15000);
+        player.addListener("not_ready", () => res(null));
+        player.connect().then((ok: boolean) => { if (!ok) res(null); });
+        setTimeout(() => res(null), 12000);
       });
-      deviceRef.current = id;
-      return id ? "sdk" : "preview";
-    } catch { return "none"; }
+      if (id) {
+        deviceRef.current = id;
+        try {
+          await sp("/me/player", { method: "PUT", body: JSON.stringify({ device_ids: [id], play: false }) });
+          await sleep(800);
+          setDiag({ sdk: "ready", device: "MyRJ Web Player (this browser)", output: "full songs in this browser" });
+          return "sdk";
+        } catch (e) { setDiag({ error: `transfer failed: ${e}` }); }
+      } else setDiag({ sdk: sdkErrRef.current ?? "player never became ready (mobile browsers are not supported by Spotify's web player)" });
+    }
+    // 2) Spotify Connect: control his Spotify app (phone/desktop)
+    setStatus("Looking for your Spotify app…");
+    for (let t = 0; t < 20 && !stopRef.current; t++) {
+      const d = await findConnectDevice();
+      if (d) { connectDeviceRef.current = d; setDiag({ output: "full songs via your Spotify app (Connect)" }); return "connect"; }
+      setStatus("Open the Spotify app on this phone (play/pause anything once), MyRJ will pick it up…");
+      await sleep(3000);
+    }
+    setDiag({ output: "previews (no playable Spotify device found)" });
+    return "preview";
+  }
+
+  async function startOn(device: string, t: TrackInfo) {
+    try {
+      await sp(`/me/player/play?device_id=${device}`, { method: "PUT", body: JSON.stringify({ uris: [t.uri] }) });
+    } catch (e) {
+      // device may have gone idle: transfer then retry once
+      setDiag({ error: String(e) });
+      await sp("/me/player", { method: "PUT", body: JSON.stringify({ device_ids: [device], play: false }) }).catch(() => {});
+      await sleep(1000);
+      await sp(`/me/player/play?device_id=${device}`, { method: "PUT", body: JSON.stringify({ uris: [t.uri] }) });
+    }
+  }
+
+  /** Spotify Connect playback: poll /me/player until the track ends. */
+  async function playConnect(t: TrackInfo) {
+    const dev = connectDeviceRef.current!;
+    await startOn(dev, t);
+    sp(`/me/player/volume?volume_percent=85&device_id=${dev}`, { method: "PUT" }).catch(() => {});
+    let skipped = false, started = false;
+    skipRef.current = () => { skipped = true; };
+    const deadline = Date.now() + (t.durationMs ?? 240000) + 15000;
+    while (!stopRef.current && !skipped && Date.now() < deadline) {
+      await sleep(1500);
+      const st = await sp<any>("/me/player").catch(() => null);
+      if (!st?.item) continue;
+      if (st.item.uri !== t.uri) { if (started) break; continue; }
+      if (st.is_playing) started = true;
+      setProgress(st.progress_ms / st.item.duration_ms);
+      if (st.item.duration_ms - st.progress_ms < 2500) break;
+      if (started && !st.is_playing && st.progress_ms === 0) break;
+    }
+    await sp(`/me/player/pause?device_id=${dev}`, { method: "PUT" }).catch(() => {});
   }
 
   /** Plays a song; resolves ~3s before the end (after a fade) so the RJ can come in with no gap. */
   async function playSong(t: TrackInfo, o: Out) {
     setNow(t); setProgress(0);
+    const t0 = Date.now();
+    try {
+      if (o === "connect" && t.uri) { setPhase("song"); setStatus(`Playing on ${diagRef.current.device ?? "your Spotify app"}`); await playConnect(t); }
+      else await playSongInner(t, o);
+    } catch (e) {
+      const msg = String(e);
+      setDiag({ error: msg }); setPhase("waiting");
+      setStatus(/403/.test(msg) ? "Spotify refused playback (403). Premium is required for full songs." : /404/.test(msg) ? "Spotify device not found (404). Open Spotify on your phone, then tap Next." : `Playback error: ${msg}`);
+      setShowDiag(true);
+    }
+    // never skip silently in under a few seconds
+    const elapsed = Date.now() - t0;
+    if (elapsed < 6000 && !stopRef.current) await new Promise<void>((r) => { skipRef.current = r; setTimeout(r, 6000 - elapsed); });
+  }
+
+  async function playSongInner(t: TrackInfo, o: Out) {
     if (o === "sdk" && t.uri) {
       setPhase("song"); setStatus("Now playing");
       await playerRef.current.activateElement?.();
       await playerRef.current.setVolume(0.0001).catch(() => {});
-      await sp(`/me/player/play?device_id=${deviceRef.current}`, { method: "PUT", body: JSON.stringify({ uris: [t.uri] }) });
+      await startOn(deviceRef.current!, t);
       fadeSdk(SONG_VOL, 1500);
       let skipped = false, started = false;
       skipRef.current = () => { skipped = true; };
@@ -146,18 +252,23 @@ export default function Live() {
       return;
     }
     if (t.previewUrl) { setPhase("song"); setStatus("30s preview (full songs need Spotify Premium)"); return playClip(t.previewUrl, { maxMs: 29000, fadeIn: true }); }
-    setPhase("waiting"); setStatus("No preview for this track. Open it in Spotify or tap Next.");
-    return new Promise<void>((resolve) => { skipRef.current = resolve; setTimeout(resolve, 25000); });
+    setPhase("waiting");
+    setStatus(diagRef.current.product && diagRef.current.product !== "premium"
+      ? "Spotify Free: full songs can't play inside MyRJ and Spotify gives no preview for this one. Tap Open in Spotify, or Next."
+      : "Can't play this track here. Tap Open in Spotify, or Next.");
+    return new Promise<void>((resolve) => { skipRef.current = resolve; setTimeout(resolve, 30000); });
   }
 
   // ---------- main loop ----------
   async function goLive() {
+    playerRef.current?.activateElement?.(); // must run inside the tap gesture (autoplay rules)
     const p = effPrefs(); setPrefs(p);
     if (!p.voiceId) { setStatus("Pick a voice in Settings first."); return; }
     stopRef.current = false; recentRef.current = [];
     setPhase("tuning"); setStatus("Tuning in…");
     new Audio().play().catch(() => {}); // unlock audio on this tap
     const o = await setupSpotify(); setOut(o);
+    if (o === "none") setDiag({ output: "no Spotify connected (RJ only)" });
     curatorRef.current = o !== "none" ? new Curator(modeRef.current) : null;
     const nextTrack = async () => (curatorRef.current ? curatorRef.current.next() : null);
 
@@ -268,6 +379,24 @@ export default function Live() {
             <div className="min-w-0 flex-1 text-left"><p className="text-[10px] uppercase tracking-widest text-zinc-500">Up next</p><p className="truncate text-sm">{upNext.name} · <span className="text-zinc-400">{upNext.artists}</span></p></div>
           </div>
         )}
+
+        {needReconnect && <a href="/api/auth/spotify/login" className="rounded-xl bg-green-700 p-3 text-center text-sm font-semibold">Spotify permissions missing for playback. Tap to reconnect Spotify</a>}
+        <div className="rounded-xl bg-zinc-900/70 p-2.5 text-left text-xs text-zinc-400 backdrop-blur">
+          <button onClick={() => setShowDiag((v) => !v)} className="flex w-full justify-between">
+            <span>Playback: <b className="text-zinc-200">{diag.output ?? (diag.account === "not connected" ? "Spotify not connected" : "not started")}</b>{diag.error && <span className="text-red-400"> · error</span>}</span>
+            <span>{showDiag ? "▴" : "▾"}</span>
+          </button>
+          {showDiag && (
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+              <dt>Account</dt><dd className="truncate">{diag.account ?? "?"} {diag.product && `(${diag.product})`}</dd>
+              <dt>Scopes</dt><dd>{diag.scopes ?? "?"}</dd>
+              <dt>Web player</dt><dd>{diag.sdk ?? "?"}</dd>
+              <dt>Device</dt><dd>{diag.device ?? "?"}</dd>
+              {diag.error && <><dt className="text-red-400">Last error</dt><dd className="break-words text-red-300">{diag.error}</dd></>}
+              <dt></dt><dd><a href="/api/auth/spotify/login" className="text-green-400 underline">Reconnect Spotify</a></dd>
+            </dl>
+          )}
+        </div>
 
         <div className="flex items-center justify-center gap-4">
           {!live ? (
