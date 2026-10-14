@@ -307,7 +307,7 @@ function LiveInner() {
 
   /** FM-style pacing: mostly music, randomized, mode-aware. */
   function planBreak(i: number): Plan {
-    if (i === 0) return { kind: "full", withNews: true, withJoke: true };
+    if (i === 0) { const tp = loadPrefs(), on = !tp.justMusic; return { kind: "full", withNews: on && tp.talk.news, withJoke: on && tp.talk.jokes }; }
     const m = modeRef.current, since = ++sinceTalkRef.current;
     const r = Math.random();
     const cfg = {
@@ -841,7 +841,7 @@ function LiveInner() {
 
         const current = next;
         const following = nextTrack();
-        const plan: Plan = openerDue ? { kind: "full", withNews: true, withJoke: true } : planBreak(i + 1);
+        const plan: Plan = openerDue ? planBreak(0) : planBreak(i + 1);
         const segIndex = openerDue ? 0 : i + 1; openerDue = false;
         const prefetch = following.then((t) => { setUpNext(t); return buildSegment(effPrefs(), t, current, segIndex, plan); }).catch(() => null);
         await waitIfPaused(sid);
