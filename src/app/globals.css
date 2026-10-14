@@ -64,25 +64,19 @@ body { font-family: var(--font-sans); letter-spacing: -0.005em; }
 .onair-dot { background: #d8cfc4; opacity: .6; }
 .onair-dot.is-live { background: #ff8a7a; opacity: 1; box-shadow: 0 0 10px 2px #ff8a7a88; }
 
-/* radio mascot */
+/* radio mascot: one flat chunky shape, two blinking eyes */
 .mascot { overflow: visible; shape-rendering: geometricPrecision; }
-.mascot .m-body { transform-origin: 60px 100px; transform-box: view-box; }
+.mascot .m-body { transform-origin: 60px 106px; transform-box: view-box; }
 .mascot-idle .m-body { animation: m-float 4.5s ease-in-out infinite; }
-.mascot-live .m-body { animation: m-bob .52s cubic-bezier(.3,0,.3,1) infinite alternate; }
-.mascot-talking .m-body { animation: m-bob .7s ease-in-out infinite alternate; }
-.mascot .m-eyes { transform-origin: 52px 58px; transform-box: view-box; transition: transform .08s; }
-.mascot.is-blink .m-eyes { transform: scaleY(.1); }
-.mascot .m-tip { transform-origin: 90px 12px; transform-box: view-box; }
-.mascot-talking .m-tip { animation: m-pulse .6s ease-in-out infinite; }
-.mascot-live .m-tip { animation: m-pulse 1.04s ease-in-out infinite; opacity: .9; }
-.mascot .m-bar { transform-box: fill-box; transform-origin: center; }
-.mascot-talking .m-bar { animation: m-talk .32s ease-in-out infinite alternate; }
-.mascot .m-dial { transform-origin: 90px 58px; transform-box: view-box; }
-.mascot-live .m-dial, .mascot-talking .m-dial { animation: m-dial 6s linear infinite; }
+.mascot-live .m-body { animation: m-bob 1.1s ease-in-out infinite alternate; }
+.mascot-talking .m-body { animation: m-breathe 1.6s ease-in-out infinite; }
+.mascot .m-eyes { transform-origin: 55px 65px; transform-box: view-box; transition: transform .09s; }
+.mascot.is-blink .m-eyes { transform: scaleY(.12); }
+.mascot .m-tip { transform-origin: 87px 15px; transform-box: view-box; }
+.mascot-talking .m-tip { animation: m-pulse .7s ease-in-out infinite; }
 @keyframes m-float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
-@keyframes m-bob { from { transform: translateY(0) scale(1, 1); } to { transform: translateY(-4px) scale(1.01, .985); } }
-@keyframes m-pulse { 0%,100% { transform: scale(1); filter: none; } 50% { transform: scale(1.35); filter: drop-shadow(0 0 4px #ff8a7a); } }
-@keyframes m-talk { from { transform: scaleY(.6); } to { transform: scaleY(1.9); } }
-@keyframes m-dial { to { transform: rotate(360deg); } }
+@keyframes m-bob { from { transform: translateY(0); } to { transform: translateY(-2.5px); } }
+@keyframes m-breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.035); } }
+@keyframes m-pulse { 0%,100% { transform: scale(1); filter: none; } 50% { transform: scale(1.3); filter: drop-shadow(0 0 6px #7fe0c0); } }
 @media (prefers-reduced-motion: reduce) { .mascot *, .mascot .m-body { animation: none !important; } }
 @media (prefers-reduced-motion: reduce) { .ambient::before, .ambient::after, .onair-orb { animation: none !important; } }
