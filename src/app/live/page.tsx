@@ -218,18 +218,22 @@ function LiveInner() {
   }
   // Voice amplitude for the mascot. Skipped on iOS/Safari: routing the element through Web Audio there can mute it if the context suspends.
   const analyserRef = useRef<{ an: AnalyserNode; buf: Uint8Array<ArrayBuffer> } | null>(null);
-  const analyserTriedRef = useRef(false);
+  /** Mascot lip-sync. NEVER reroutes the element (createMediaElementSource can silence it): taps a captureStream() copy instead.
+   *  Chrome/Edge only; anything else (or any error) means the mascot uses its rhythmic fallback. Re-created per clip. */
   function attachAnalyser() {
-    if (analyserTriedRef.current || !voiceElRef.current) return;
-    const ua = navigator.userAgent;
-    if (/iPhone|iPad|iPod/.test(ua) || (/Safari/.test(ua) && !/Chrome|Chromium|Edg|Firefox/.test(ua)) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) { analyserTriedRef.current = true; return; }
-    try {
-      const c = ac(); if (c.state !== "running") return; // try again on a later clip
-      analyserTriedRef.current = true;
-      const src = c.createMediaElementSource(voiceElRef.current), an = c.createAnalyser();
-      an.fftSize = 512; an.smoothingTimeConstant = 0.5; src.connect(an); an.connect(c.destination);
-      analyserRef.current = { an, buf: new Uint8Array(new ArrayBuffer(an.fftSize)) };
-    } catch (e) { log(`voice analyser unavailable: ${e}`); }
+    analyserRef.current = null;
+    const el = voiceElRef.current as (HTMLAudioElement & { captureStream?: () => MediaStream }) | null;
+    if (!el || typeof el.captureStream !== "function" || !/Chrome|Chromium|Edg/.test(navigator.userAgent) || /iPhone|iPad|Android/.test(navigator.userAgent)) return;
+    const c = ctxRef.current; if (!c || c.state !== "running") return;
+    const hook = () => {
+      try {
+        const st = el.captureStream!(); if (!st.getAudioTracks().length) return;
+        const src = c.createMediaStreamSource(st), an = c.createAnalyser(); // analyser is NOT connected to the destination
+        an.fftSize = 512; an.smoothingTimeConstant = 0.5; src.connect(an);
+        analyserRef.current = { an, buf: new Uint8Array(new ArrayBuffer(an.fftSize)) };
+      } catch { analyserRef.current = null; }
+    };
+    el.addEventListener("playing", hook, { once: true });
   }
   const voiceLevel = useCallback((): number | null => {
     const x = analyserRef.current, el = voiceElRef.current;
