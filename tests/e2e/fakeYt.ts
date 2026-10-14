@@ -1,7 +1,7 @@
 /* Fake YouTube IFrame API + our /api/youtube/* routes. Videos carry their true language for assertions. */
 import type { Page } from "@playwright/test";
 
-export interface FV { id: string; title: string; channel: string; seconds: number; audioLang?: string; lang: string; instrumental?: boolean }
+export interface FV { id: string; title: string; channel: string; seconds: number; audioLang?: string; lang: string; instrumental?: boolean; label?: string }
 export class YtWorld {
   loads: { t: number; id: string }[] = [];
   searches: string[] = [];
@@ -34,16 +34,16 @@ const SDK = (songSec: number) => `(() => {
   setTimeout(() => window.onYouTubeIframeAPIReady && window.onYouTubeIframeAPIReady(), 50);
 })();`;
 
-export async function setupYt(page: Page, o: { songSec?: number; connected?: boolean; pool?: FV[]; search?: (q: string) => FV[] } = {}) {
+export async function setupYt(page: Page, o: { songSec?: number; connected?: boolean; pool?: FV[]; search?: (q: string) => FV[]; links?: FV[] } = {}) {
   const w = new YtWorld();
-  for (const v of o.pool ?? []) w.add(v);
-  const out = (v: FV) => ({ id: v.id, title: v.title, channel: v.channel, seconds: v.seconds, audioLang: v.audioLang });
+  for (const v of [...(o.pool ?? []), ...(o.links ?? [])]) w.add(v);
+  const out = (v: FV) => ({ id: v.id, title: v.title, channel: v.channel, seconds: v.seconds, audioLang: v.audioLang, lang: v.label });
   await page.route("https://www.youtube.com/iframe_api", (r) => r.fulfill({ contentType: "application/javascript", body: SDK(o.songSec ?? 20) }));
   await page.route(/https:\/\/(www\.)?(youtube\.com|googleapis\.com|ytimg\.com)\/.*/, (r) => r.request().url().includes("iframe_api") ? r.fallback() : r.fulfill({ status: 204 }));
   await page.route("**/__yt/load**", (r) => { w.loads.push({ t: Date.now(), id: new URL(r.request().url()).searchParams.get("id")! }); r.fulfill({ status: 204 }); });
   await page.route("**/api/youtube/songs?status", (r) => r.fulfill({ json: { configured: true, connected: o.connected ?? true } }));
   await page.route("**/api/youtube/pool", async (r) => { w.poolCalls++; await new Promise((x) => setTimeout(x, 500)); r.fulfill({ json: { videos: (o.pool ?? []).map(out) } }); });
-  await page.route("**/api/youtube/links", (r) => r.fulfill({ json: { videos: [] } }));
+  await page.route("**/api/youtube/links", (r) => r.fulfill({ json: { videos: (o.links ?? []).map(out) } }));
   await page.route("**/api/youtube/search**", async (r) => {
     const q = new URL(r.request().url()).searchParams.get("q") ?? ""; w.searches.push(q);
     await new Promise((x) => setTimeout(x, 600));

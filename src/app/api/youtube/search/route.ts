@@ -3,6 +3,8 @@ import { ytAccessToken } from "@/lib/youtube";
 import { ytSearch } from "@/lib/ytmusic";
 
 /** GET ?q=&focus=1 — 101 quota units. The client caches results for 24h and caps searches per session. */
+export const maxDuration = 60;
+
 export async function GET(req: Request) {
   await connection();
   const u = new URL(req.url), q = (u.searchParams.get("q") ?? "").slice(0, 120);

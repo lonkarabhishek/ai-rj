@@ -89,7 +89,7 @@ function LiveInner() {
   const yt = () => (ytRef.current ??= new YtPlayer());
   const canDuck = () => outRef.current === "sdk" || outRef.current === "youtube";
   const mkCurator = (m: ListenMode): AnyCurator => outRef.current === "youtube"
-    ? new YtCurator(m, loadPrefs().songLangs, (loadPrefs().externalPlaylists ?? []).map((x) => x.url))
+    ? new YtCurator(m, loadPrefs().songLangs, (loadPrefs().externalPlaylists ?? []).map((x) => x.url), loadPrefs().tasteSeeds ?? [])
     : new Curator(m, loadPrefs().tasteSeeds ?? [], loadPrefs().songLangs);
   const recentRef = useRef<string[]>([]);
   const ttsQuotaRef = useRef(false);
@@ -216,7 +216,7 @@ function LiveInner() {
   useEffect(() => {
     if (prefs.music !== "youtube" || !ytHostRef.current) return;
     yt().mount(ytHostRef.current).then(() => {
-      try { const c = JSON.parse(localStorage.getItem("myrj.yt.pool") ?? "null"); const v = c?.v?.[0]; if (v && !yt().current) yt().cue(v.id); } catch { /* ignore */ }
+      try { const c = JSON.parse(localStorage.getItem("myrj.yt.pool2") ?? "null"); const v = c?.v?.[0]; if (v && !yt().current) yt().cue(v.id); } catch { /* ignore */ }
     }).catch(() => {});
   }, [prefs.music]); // eslint-disable-line react-hooks/exhaustive-deps
 

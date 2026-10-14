@@ -1,9 +1,10 @@
 "use client";
 /* YouTube source (client): curation from his likes/playlists/imported links + sparing, cached searches; IFrame player wrapper. */
 import type { ListenMode, SongLang, TrackInfo } from "./prefs";
+export const POOL_KEY = "myrj.yt.pool2";
 
-export interface YtVideo { id: string; title: string; channel: string; seconds: number; image?: string; audioLang?: string; topic?: boolean }
-type Tagged = YtVideo & { via?: SongLang | "mode" | "focus" };
+export interface YtVideo { id: string; title: string; channel: string; seconds: number; image?: string; audioLang?: string; topic?: boolean; lang?: string; src?: "like" | "playlist" | "link" }
+type Tagged = YtVideo & { via?: SongLang | "mode" | "focus"; rec?: boolean };
 
 const DAY = 24 * 3600e3;
 const SEARCH_CAP = 4; // per session: 4 × 101 units
@@ -32,6 +33,10 @@ const AUDIO: Record<string, SongLang> = { en: "english", hi: "hindi", pa: "punja
 /** Strict: a specific language must be positively signalled; uncertain videos are dropped. */
 export function videoLang(v: Tagged): { lang: SongLang | null; sure: boolean } {
   const text = `${v.title} ${v.channel}`;
+  // Server-side label (Claude, from title + channel): authoritative when present.
+  if (v.lang === "instrumental") return { lang: null, sure: true };
+  if (v.lang === "other") return { lang: null, sure: true };
+  if (v.lang) return { lang: v.lang as SongLang, sure: true };
   const al = v.audioLang ? AUDIO[v.audioLang.split("-")[0]] : undefined;
   if (al && al !== "hindi" && al !== "english") return { lang: al, sure: true };
   for (const [l, re] of SCRIPT) if (re.test(text)) return { lang: l === "hindi" && /marathi/i.test(text) ? "marathi" : l, sure: true };
@@ -73,7 +78,7 @@ export class YtCurator {
   private bad: Set<string>;
   private pool: Tagged[] | null = null;
   private langs: SongLang[];
-  constructor(private mode: ListenMode, langs: SongLang[], private links: string[] = []) {
+  constructor(private mode: ListenMode, langs: SongLang[], private links: string[] = [], private seeds: TrackInfo[] = []) {
     this.langs = langs.filter((l) => l !== "any");
     let b: string[] = []; try { b = JSON.parse(localStorage.getItem("myrj.yt.bad") || "[]"); } catch { /* ignore */ }
     this.bad = new Set(b);
@@ -82,17 +87,23 @@ export class YtCurator {
 
   private async loadPool(): Promise<Tagged[]> {
     if (this.pool) return this.pool;
-    let base = cacheGet<YtVideo[]>("myrj.yt.pool");
-    if (!base) {
-      const [mine, links] = await Promise.all([
-        fetch("/api/youtube/pool").then((r) => (r.ok ? r.json() : { videos: [] })).then((j) => j.videos ?? []).catch(() => []),
-        this.links.length ? fetch("/api/youtube/links", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ urls: this.links }) }).then((r) => r.json()).then((j) => j.videos ?? []).catch(() => []) : Promise.resolve([]),
-      ]);
-      base = [...mine, ...links];
-      if (base.length) cacheSet("myrj.yt.pool", base);
-    }
-    this.pool = base;
-    return base;
+    const linkKey = `myrj.yt.links.${this.links.join("|").length}.${this.links.slice(-1)[0] ?? ""}`;
+    const [mine, links] = await Promise.all([
+      cacheGet<YtVideo[]>(POOL_KEY) ?? fetch("/api/youtube/pool").then((r) => (r.ok ? r.json() : { videos: [] })).then((j) => { const v: YtVideo[] = j.videos ?? []; if (v.length) cacheSet(POOL_KEY, v); return v; }).catch(() => [] as YtVideo[]),
+      !this.links.length ? Promise.resolve([] as YtVideo[]) : cacheGet<YtVideo[]>(linkKey) ?? fetch("/api/youtube/links", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ urls: this.links }) }).then((r) => r.json()).then((j) => { const v: YtVideo[] = j.videos ?? []; if (v.length) cacheSet(linkKey, v); return v; }).catch(() => [] as YtVideo[]),
+    ]);
+    const seen = new Set<string>();
+    this.pool = [...links, ...mine].filter((v) => !seen.has(v.id) && !!seen.add(v.id));
+    return this.pool;
+  }
+
+  /** His artists, most frequent first (library + imported songs), with the language his own songs by them are in. */
+  topArtists(pool: Tagged[]): { name: string; lang: SongLang | null }[] {
+    const n = new Map<string, { c: number; lang: SongLang | null }>();
+    const bump = (name: string, lang: SongLang | null) => { const k = name.trim(); if (!k || /various|t-series|zee music|sony music|tips|saregama|yrf|vevo$|records?$|music company/i.test(k)) return; const e = n.get(k) ?? { c: 0, lang: null }; e.c++; e.lang ??= lang; n.set(k, e); };
+    for (const v of pool) bump(v.channel.replace(/\s*-\s*Topic$/i, ""), videoLang(v).lang);
+    for (const s of this.seeds) bump((s.artists ?? "").split(",")[0], null);
+    return [...n.entries()].sort((a, b) => b[1].c - a[1].c).map(([name, e]) => ({ name, lang: e.lang }));
   }
 
   private async search(q: string, via: Tagged["via"], focus = false): Promise<Tagged[]> {
@@ -117,18 +128,29 @@ export class YtCurator {
 
   private async refill() {
     const pool = (await this.loadPool()).filter((v) => this.ok(v));
-    let picks: Tagged[] = [...pool].sort(() => Math.random() - 0.5).slice(0, 8);
-    if (picks.length < 4) {
-      // Not enough from his own library: one cached/capped search per language (max 2).
+    // His own library is the main source: likes + playlists + imported links.
+    let picks: Tagged[] = [...pool].sort(() => Math.random() - 0.5).slice(0, 6);
+    // Taste-based picks: songs by artists he already has (same language rules), never generic charts while he has artists.
+    const want = picks.length >= 4 ? 2 : 10;
+    const artists = this.mode === "focus" ? [] : this.topArtists(await this.loadPool())
+      .filter((a) => !this.langs.length || (a.lang ? this.langs.includes(a.lang) : this.langs.length === 1))
+      .slice(0, 12).sort(() => Math.random() - 0.5).slice(0, picks.length >= 4 ? 1 : 2);
+    const qs: [string, Tagged["via"]][] = artists.map((a) => [`${a.name} songs`, a.lang ?? (this.langs[0] ?? "mode")]);
+    if (!qs.length && picks.length < 4) {
       const langs: SongLang[] = this.langs.length ? [...this.langs].sort(() => Math.random() - 0.5) : ["any"];
-      const qs: [string, Tagged["via"]][] = [];
       for (const l of langs) {
         if (this.mode === "focus") qs.push([l === "any" ? "lofi piano instrumental study" : LQ[l].focus, "focus"]);
         else { const base = l === "any" ? ["top hits songs", "new songs"] : LQ[l].q; const q = base[Math.floor(Math.random() * base.length)]; qs.push([`${q} ${MODEQ[this.mode]}`.trim(), l === "any" ? "mode" : l]); }
       }
+    }
+    if (qs.length) {
       const found = (await Promise.all(qs.slice(0, 2).map(([q, via]) => this.search(q, via, this.mode === "focus")))).flat().filter((v) => this.ok(v));
       const seen = new Set(picks.map((p) => p.id));
-      picks = [...picks, ...found.filter((v) => !seen.has(v.id) && !!seen.add(v.id)).sort(() => Math.random() - 0.5).slice(0, 10)];
+      const recs = found.filter((v) => !seen.has(v.id) && !!seen.add(v.id)).sort(() => Math.random() - 0.5).slice(0, want).map((v) => ({ ...v, rec: true }));
+      // Interleave: ~3 of his songs, then 1 recommendation.
+      const out: Tagged[] = [];
+      while (picks.length || recs.length) { out.push(...picks.splice(0, 3)); if (recs.length) out.push(recs.shift()!); }
+      picks = out;
     }
     this.queue.push(...picks.map(toTrack));
   }

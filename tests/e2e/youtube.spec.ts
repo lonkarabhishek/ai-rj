@@ -112,3 +112,28 @@ test("YouTube quota: searches capped per session and cached for the next one", a
   await expect.poll(() => y.loads.length, { timeout: 15000 }).toBeGreaterThan(5);
   console.log(`YT searches: session1 ${s1}, session2 ${y.searches.length - s1}; pool calls ${y.poolCalls}`);
 });
+
+test("YouTube: his library + imported links come first; recommendations are from his artists, not generic charts", async ({ context, page }, ti) => {
+  // Real-world library: no defaultAudioLanguage, plain Latin titles; the server labels languages.
+  const lib = [
+    vid("english", "Yellow", { channel: "Coldplay - Topic", label: "english" }),
+    vid("english", "Fix You", { channel: "Coldplay", label: "english" }),
+    vid("hindi", "Tum Se Hi", { channel: "Mohit Chauhan - Topic", label: "hindi" }),
+    vid("hindi", "Agar Tum Saath Ho", { channel: "A.R. Rahman - Topic", label: "hindi" }),
+    vid("tamil", "Why This Kolaveri Di", { channel: "Dhanush - Topic", label: "tamil" }),
+    vid("other", "Despacito", { channel: "Luis Fonsi", label: "other" }),
+  ];
+  const links = [vid("english", "Viva La Vida", { channel: "Coldplay - Topic", label: "english" }), vid("hindi", "Kun Faya Kun", { channel: "A.R. Rahman - Topic", label: "hindi" })];
+  const mine = new Set([...lib, ...links].map((v) => v.id));
+  const w = await setup(context, page, { mobile: mob(ti.project.name), prefs: prefsYt({ externalPlaylists: [{ url: "https://music.youtube.com/playlist?list=PLx", name: "Mine" }] }), segmentMs: 300 });
+  const y = await setupYt(page, { pool: lib, links, songSec: 3, search: (q) => [vid("english", `${q} A`, { channel: "Coldplay", label: "english" }), vid("hindi", `${q} B`, { channel: "A.R. Rahman", label: "hindi" })] });
+  await page.goto("/live"); await goLive(page, w);
+  await expect.poll(() => y.loads.length, { timeout: 40000 }).toBeGreaterThan(5);
+  const ids = y.loads.map((l) => l.id);
+  expect(ids.slice(0, 3).every((id) => mine.has(id)), "first songs are his").toBe(true);
+  expect(ids.filter((id) => mine.has(id)).length / ids.length).toBeGreaterThanOrEqual(0.6);
+  expect(ids.some((id) => links.some((l) => l.id === id)), "imported links play").toBe(true);
+  expect(y.loads.map((l) => y.videos.get(l.id)!.lang).filter((l) => l !== "hindi" && l !== "english")).toEqual([]);
+  for (const q of y.searches) expect(q, "taste search, not generic").toMatch(/^(Coldplay|Coldplay - Topic|Mohit Chauhan - Topic|A\.R\. Rahman - Topic|Mohit Chauhan|A\.R\. Rahman) songs$/);
+  console.log("searches:", y.searches);
+});

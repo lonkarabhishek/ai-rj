@@ -3,6 +3,8 @@ import { youtubeEnabled, ytAccessToken } from "@/lib/youtube";
 import { ytPool } from "@/lib/ytmusic";
 
 /** His YouTube likes + playlists as playable videos (≈10-15 quota units). Client caches it for a day. */
+export const maxDuration = 60;
+
 export async function GET() {
   await connection();
   if (!youtubeEnabled()) return Response.json({ error: "YouTube isn't configured" }, { status: 501 });
