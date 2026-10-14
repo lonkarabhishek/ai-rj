@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { isOnboarded, loadPrefs, MODES, VIBE_MAX, type ListenMode, type Prefs, type TrackInfo } from "@/lib/prefs";
+import { isOnboarded, loadPrefs, MODES, type ListenMode, type Prefs, type TrackInfo } from "@/lib/prefs";
 import { Curator, getMe, getToken, getTokenInfo, sp, SpotifyError } from "@/lib/spotifyClient";
 import { AllPrefs, usePrefs } from "@/components/prefs";
 import { cx, Spinner } from "@/components/ui";
@@ -17,7 +17,7 @@ type Out = "sdk" | "connect" | "preview" | "none";
 type Phase = "idle" | "tuning" | "rj" | "song" | "waiting" | "recovering";
 interface Diag { account?: string; product?: string; scopes?: string; sdk?: string; device?: string; output?: string; error?: string; timings?: string; breaks?: string; voice?: string; script?: string; audio?: string; log?: string[] }
 type BreakKind = "none" | "stinger" | "full" | "switch";
-interface Plan { kind: BreakKind; withNews?: boolean; withJoke?: boolean; vibeChanged?: boolean }
+interface Plan { kind: BreakKind; withNews?: boolean; withJoke?: boolean }
 interface Segment { script: string; audioUrl: string | null; lang: string; kind: BreakKind }
 
 const NEEDED = ["streaming", "user-modify-playback-state", "user-read-playback-state"];
@@ -59,6 +59,13 @@ function LiveInner() {
 
   const sessionRef = useRef(0);
   const skipRef = useRef<() => void>(() => {});
+  // ---- playback control: one source of truth. desired (optimistic, what the button shows) vs applied (what we told Spotify/audio) ----
+  const [paused, setPaused] = useState(false);
+  const pausedRef = useRef(false);
+  const appliedPauseRef = useRef(false);
+  const ctlBusyRef = useRef(false);
+  const musicActiveRef = useRef(false); // a Spotify song is loaded and should resume on play
+  const voicePausedRef = useRef(false);
   const playerRef = useRef<any>(null);
   const readyIdRef = useRef<string | null>(null);
   const sdkErrRef = useRef<string | null>(null);
@@ -77,7 +84,6 @@ function LiveInner() {
   const sinceTalkRef = useRef(0);
   const sinceJokeRef = useRef(0);
   const switchRef = useRef<ListenMode | null>(null);
-  const vibeAckRef = useRef(false);
   const diagRef = useRef<Diag>({ log: [] });
   const wakeRef = useRef<any>(null);
   const chanRef = useRef<BroadcastChannel | null>(null);
@@ -152,6 +158,27 @@ function LiveInner() {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Lock-screen / headphone controls + space bar
+  useEffect(() => {
+    const ms = "mediaSession" in navigator ? navigator.mediaSession : null;
+    if (ms) {
+      try {
+        const art = now?.image ? [{ src: now.image, sizes: "640x640", type: "image/jpeg" }] : [];
+        ms.metadata = new MediaMetadata(phase === "rj" ? { title: `${prefs.rjName || "Your RJ"} on air`, artist: "MyRJ", artwork: art } : { title: now?.name ?? "MyRJ", artist: now?.artists ?? "", artwork: art });
+        ms.setActionHandler("play", () => togglePause(false));
+        ms.setActionHandler("pause", () => togglePause(true));
+        ms.setActionHandler("nexttrack", () => next());
+        ms.setActionHandler("stop", () => stop());
+      } catch { /* partial support */ }
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || (e.target as HTMLElement)?.closest("input,textarea,button,select")) return;
+      e.preventDefault(); togglePause();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [now, phase, prefs.rjName]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const phaseRef = useRef<Phase>("idle");
   useEffect(() => { phaseRef.current = phase; if (phase !== "tuning") setBoot(null); }, [phase]);
 
@@ -159,24 +186,87 @@ function LiveInner() {
     try { wakeRef.current = await (navigator as any).wakeLock?.request("screen"); } catch { /* not supported */ }
   }
 
-  /** Vibe request committed (Enter/blur). Live: re-steer the stream after this song and let the RJ nod to it. */
-  function commitVibe(v: string) {
-    v = v.replace(/\s+/g, " ").trim().slice(0, VIBE_MAX);
-    if (v === (loadPrefs().vibe ?? "").trim()) return;
-    up("vibe", v);
-    if (phaseRef.current !== "idle" && outRef.current !== "none") {
-      curatorRef.current = new Curator(modeRef.current, loadPrefs().tasteSeeds ?? [], v);
-      vibeAckRef.current = true; switchRef.current = modeRef.current;
-      setNotice(v ? `Vibe set: ${v}. Kicks in after this song.` : "Vibe cleared. Back to your mix after this song.");
-      setTimeout(() => setNotice(null), 3500);
+  const setPausedState = (v: boolean) => {
+    pausedRef.current = v; setPaused(v);
+    try { if ("mediaSession" in navigator) navigator.mediaSession.playbackState = v ? "paused" : "playing"; } catch { /* ignore */ }
+  };
+  async function waitIfPaused(sid: number) { while (pausedRef.current && alive(sid)) await sleep(200); }
+
+  /** Apply pause/resume to everything: Spotify, RJ voice, browser voice, music bed + jingles (Web Audio). */
+  async function applyPause(want: boolean) {
+    const a = voiceElRef.current;
+    if (want) {
+      if (a && !a.paused) { a.pause(); voicePausedRef.current = true; }
+      try { window.speechSynthesis?.pause(); } catch { /* ignore */ }
+      await ctxRef.current?.suspend().catch(() => {});
+    } else {
+      await ctxRef.current?.resume().catch(() => {});
+      if (a && voicePausedRef.current) { voicePausedRef.current = false; await a.play().catch(() => {}); }
+      try { window.speechSynthesis?.resume(); } catch { /* ignore */ }
     }
+    if (!musicActiveRef.current) return;
+    const o = outRef.current;
+    if (o === "sdk") { await (want ? playerRef.current?.pause() : playerRef.current?.resume()); return; }
+    if (o === "connect") {
+      const call = (dev: string) => sp(`/me/player/${want ? "pause" : "play"}?device_id=${dev}`, { method: "PUT" });
+      try { await call(connectDeviceRef.current!); }
+      catch (e) {
+        const st = e instanceof SpotifyError ? e.status : 0;
+        if (want && st === 403) return; // already paused
+        if (st === 404 || st === 502 || st === 503 || st === 0) { // device went away: re-acquire and retry once
+          await sleep(600);
+          const d = await findConnectDevice(); if (d) connectDeviceRef.current = d;
+          await call(connectDeviceRef.current!);
+        } else throw e;
+      }
+    }
+  }
+  /** Serialized, debounced worker: rapid taps only flip the desired state; this applies the final one, one call at a time. */
+  async function runCtl() {
+    if (ctlBusyRef.current) return;
+    ctlBusyRef.current = true;
+    try {
+      while (appliedPauseRef.current !== pausedRef.current) {
+        const want = pausedRef.current;
+        await sleep(300);
+        if (want !== pausedRef.current) continue;
+        try { await applyPause(want); }
+        catch (e) {
+          log(`${want ? "pause" : "resume"} failed: ${e}`);
+          setNotice(`Couldn't ${want ? "pause" : "resume"} Spotify. ${want ? "Paused here anyway." : "Tap Next if it stays silent."}`);
+          setTimeout(() => setNotice(null), 4000);
+        }
+        appliedPauseRef.current = want;
+      }
+    } finally { ctlBusyRef.current = false; }
+  }
+  function togglePause(force?: boolean) {
+    if (phaseRef.current === "idle" || phaseRef.current === "tuning") return;
+    const v = force ?? !pausedRef.current;
+    if (v === pausedRef.current) return;
+    setPausedState(v); navigator.vibrate?.(8); runCtl();
+  }
+  /** External pause/resume (Spotify app, lock screen, headphones) observed while polling. */
+  function syncExternal(isPlaying: boolean) {
+    if (ctlBusyRef.current) return;
+    if (!isPlaying && !pausedRef.current) { setPausedState(true); appliedPauseRef.current = true; applyPauseLocal(true); log("paused outside MyRJ"); }
+    else if (isPlaying && pausedRef.current && appliedPauseRef.current) { setPausedState(false); appliedPauseRef.current = false; applyPauseLocal(false); log("resumed outside MyRJ"); }
+  }
+  function applyPauseLocal(want: boolean) { // only our own audio, Spotify already changed
+    const a = voiceElRef.current;
+    if (want) { if (a && !a.paused) { a.pause(); voicePausedRef.current = true; } ctxRef.current?.suspend().catch(() => {}); }
+    else { ctxRef.current?.resume().catch(() => {}); if (a && voicePausedRef.current) { voicePausedRef.current = false; a.play().catch(() => {}); } }
+  }
+  function next() {
+    if (pausedRef.current) { setPausedState(false); appliedPauseRef.current = false; applyPauseLocal(false); }
+    skipRef.current();
   }
 
   function changeMode(m: ListenMode) {
     if (m === modeRef.current) return;
     setListenMode(m); modeRef.current = m;
     if (phaseRef.current !== "idle") {
-      if (outRef.current !== "none") curatorRef.current = new Curator(m, loadPrefs().tasteSeeds ?? [], loadPrefs().vibe ?? "");
+      if (outRef.current !== "none") curatorRef.current = new Curator(m, loadPrefs().tasteSeeds ?? []);
       switchRef.current = m;
       setNotice(`Switching to ${MODES.find((x) => x.id === m)!.label}…`);
       setTimeout(() => setNotice(null), 3000);
@@ -251,6 +341,7 @@ function LiveInner() {
 
   /** Must run inside a user tap: unlocks the shared audio element, Web Audio and speech synthesis (iOS/Safari). */
   function unlockAudio() {
+    try { const as = (navigator as any).audioSession; if (as && as.type !== "playback") as.type = "playback"; } catch { /* Safari 17+ only */ }
     try {
       let a = voiceElRef.current;
       if (!a) {
@@ -289,7 +380,8 @@ function LiveInner() {
       a.onerror = () => { const msg = `audio error ${a!.error?.code ?? "?"} ${a!.error?.message ?? ""}`.trim(); log(msg); setDiag({ audio: msg }); finish(); };
       if (opts.bindSkip !== false) a.ontimeupdate = () => { if (a.duration) setProgress(a.currentTime / a.duration); };
       if (opts.bindSkip !== false) skipRef.current = () => finish(true);
-      setTimeout(() => finish(true), opts.maxMs ?? 120000); // safety: never hang on a clip
+      const arm = (ms: number) => setTimeout(() => { if (pausedRef.current) arm(1000); else finish(true); }, ms);
+      arm(opts.maxMs ?? 120000); // safety: never hang on a clip (paused time doesn't count)
       const start = () => a!.play().then(() => { setDiag({ audio: "ok" }); if (opts.fadeIn) fadeEl(a!, 1, 1500); });
       start().catch((e) => {
         if (done) return;
@@ -387,7 +479,7 @@ function LiveInner() {
     try {
       const seg = await withTimeout(fetch("/api/segment", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prefs: p, next, prev, index, mode: modeRef.current, recent: recentRef.current.slice(-4), hour: new Date().getHours(), kind: plan.kind, withNews: !!plan.withNews, withJoke: !!plan.withJoke, vibeChanged: !!plan.vibeChanged }),
+        body: JSON.stringify({ prefs: p, next, prev, index, mode: modeRef.current, recent: recentRef.current.slice(-4), hour: new Date().getHours(), kind: plan.kind, withNews: !!plan.withNews, withJoke: !!plan.withJoke }),
       }).then(async (r) => { if (!r.ok) throw new Error(`segment ${r.status} ${(await r.text().catch(() => "")).slice(0, 120)}`); return r.json(); }), 20000, "segment");
       setDiag({ script: `${seg.mode ?? "?"} ok` });
       breaksRef.current = [...breaksRef.current, `${plan.kind}:${!seg.script ? "skip" : seg.mode === "llm" ? "claude" : "template"}`].slice(-6);
@@ -524,12 +616,14 @@ function LiveInner() {
     outro?.then((x) => { ready = x; }).catch(() => { ready = null; });
     let skipped = false, started = false, nullStates = 0, usedOutro = false, fading = false;
     skipRef.current = () => { skipped = true; };
-    const t0 = Date.now(), deadline = t0 + (t.durationMs ?? 240000) + 10000;
+    const t0 = Date.now(); let deadline = t0 + (t.durationMs ?? 240000) + 10000;
     while (alive(sid) && !skipped && Date.now() < deadline) {
       await sleep(400);
       const st = await playerRef.current.getCurrentState().catch(() => null);
+      if (pausedRef.current) { deadline += 400; if (st && !st.paused && appliedPauseRef.current) syncExternal(true); continue; }
       if (!st) { if (++nullStates > 20) throw new Error("web player lost playback"); continue; }
       nullStates = 0;
+      if (started && st.paused && st.position > 0 && st.duration - st.position > 3000 && !talkingRef.current) { syncExternal(false); continue; }
       if (!st.paused) started = true;
       if (!started && Date.now() - t0 > 10000) throw new Error("song never started");
       if (st.duration) setProgress(st.position / st.duration);
@@ -554,10 +648,12 @@ function LiveInner() {
     sp(`/me/player/volume?volume_percent=85&device_id=${dev}`, { method: "PUT" }).catch(() => {});
     let skipped = false, started = false;
     skipRef.current = () => { skipped = true; };
-    const t0 = Date.now(), deadline = t0 + (t.durationMs ?? 240000) + 15000;
+    const t0 = Date.now(); let deadline = t0 + (t.durationMs ?? 240000) + 15000;
     while (alive(sid) && !skipped && Date.now() < deadline) {
       await sleep(1500);
       const st = await sp<any>("/me/player").catch(() => null);
+      if (pausedRef.current) { deadline += 1500; if (st?.is_playing && st.item?.uri === t.uri && appliedPauseRef.current) syncExternal(true); continue; }
+      if (started && st?.item?.uri === t.uri && !st.is_playing && st.progress_ms > 0 && st.item.duration_ms - st.progress_ms > 3000) { syncExternal(false); continue; }
       if (!st?.item) { if (!started && Date.now() - t0 > 15000) throw new Error("song never started on device"); continue; }
       if (st.item.uri !== t.uri) { if (started) break; continue; }
       if (st.is_playing) started = true;
@@ -570,12 +666,16 @@ function LiveInner() {
 
   /** Returns true if the song played (or was skipped by the user), false on a playback failure. */
   async function playSong(t: TrackInfo, sid: number, over?: Segment | null, outro?: Promise<Segment | null> | null): Promise<boolean | "outro"> {
+    musicActiveRef.current = true;
+    try { return await playSongInner(t, sid, over, outro); } finally { musicActiveRef.current = false; }
+  }
+  async function playSongInner(t: TrackInfo, sid: number, over?: Segment | null, outro?: Promise<Segment | null> | null): Promise<boolean | "outro"> {
     setNow(t); setProgress(0);
     const o = outRef.current;
     const t0 = Date.now();
     try {
       if ((o === "sdk" || o === "connect") && t.uri) {
-        setPhase("song"); setStatus(o === "sdk" ? "" : `On ${diagRef.current.device}`);
+        setPhase("song"); setStatus(o === "sdk" ? "" : `Playing on ${(diagRef.current.device ?? "your device").replace(/\s*\([^)]*\)$/, "")}`);
         if (o === "sdk") return (await playSdk(t, sid, over, outro)) ? "outro" : true;
         await playConnect(t, sid);
         return true;
@@ -619,7 +719,7 @@ function LiveInner() {
     const t0 = performance.now(), times: string[] = [];
     const timed = <T,>(name: string, pr: Promise<T>) => pr.finally(() => { times.push(`${name} ${((performance.now() - t0) / 1000).toFixed(1)}s`); setDiag({ timings: times.join(" · ") }); });
     bootStep("spotify", "Connecting to Spotify…");
-    const curator = new Curator(modeRef.current, loadPrefs().tasteSeeds ?? [], loadPrefs().vibe ?? "");
+    const curator = new Curator(modeRef.current, loadPrefs().tasteSeeds ?? []);
     const nextFrom = async (c: Curator | null): Promise<TrackInfo | null> => {
       if (!c) return null;
       for (let i = 0; i < 3; i++) { const t = await c.next().catch(() => null); if (t) return t; await sleep(1500); }
@@ -652,6 +752,7 @@ function LiveInner() {
 
     const speak = async (seg: Segment) => {
       if (talkingRef.current) await talkingRef.current;
+      await waitIfPaused(sid);
       setScript(seg.script); setPhase("rj"); setStatus(""); setNow(null);
       await jingle();
       const bed = seg.kind === "full" && seg.script.length > 140;
@@ -665,9 +766,8 @@ function LiveInner() {
         // Mode switched mid-stream: fresh track from the new mode + a short transition line, right now.
         if (switchRef.current) {
           switchRef.current = null;
-          const vibeChanged = vibeAckRef.current; vibeAckRef.current = false;
           next = await nextTrack(); setUpNext(next);
-          const sw = await buildSegment(effPrefs(), next, prev, i, { kind: "switch", vibeChanged });
+          const sw = await buildSegment(effPrefs(), next, prev, i, { kind: "switch" });
           if (!alive(sid)) break;
           if (sw) await speak(sw);
           pending = null;
@@ -690,7 +790,7 @@ function LiveInner() {
           setPhase("waiting");
           setStatus(outRef.current === "none" ? "Connect Spotify for music. Your RJ will keep you company." : "Finding more music…");
           await sleep(outRef.current === "none" ? 45000 : 8000);
-          if (outRef.current !== "none" && !curatorRef.current) curatorRef.current = new Curator(modeRef.current, loadPrefs().tasteSeeds ?? [], loadPrefs().vibe ?? "");
+          if (outRef.current !== "none" && !curatorRef.current) curatorRef.current = new Curator(modeRef.current, loadPrefs().tasteSeeds ?? []);
           next = await nextTrack(); setUpNext(next);
           pending = outRef.current === "none" ? buildSegment(effPrefs(), null, prev, i + 1, { kind: "full", withJoke: true }) : null;
           continue;
@@ -701,6 +801,8 @@ function LiveInner() {
         const plan: Plan = openerDue ? { kind: "full", withNews: true, withJoke: true } : planBreak(i + 1);
         const segIndex = openerDue ? 0 : i + 1; openerDue = false;
         const prefetch = following.then((t) => { setUpNext(t); return buildSegment(effPrefs(), t, current, segIndex, plan); }).catch(() => null);
+        await waitIfPaused(sid);
+        if (!alive(sid)) break;
         const res = await playSong(current, sid, over, plan.kind === "none" ? null : prefetch);
         const ok = res !== false;
         if (!alive(sid)) break;
@@ -718,6 +820,7 @@ function LiveInner() {
   }
 
   function stop(msg?: string) {
+    setPausedState(false); appliedPauseRef.current = false; voicePausedRef.current = false; ctxRef.current?.resume().catch(() => {});
     sessionRef.current++; skipRef.current();
     audioRef.current?.pause(); playerRef.current?.pause().catch(() => {});
     bedRef.current?.stop(); setSpeaking(false); talkingRef.current = null;
@@ -747,7 +850,6 @@ function LiveInner() {
           </div>
         </header>
 
-        <VibeInput value={prefs.vibe ?? ""} focus={listenMode === "focus"} onCommit={commitVibe} />
         <ModeDock value={listenMode} onChange={changeMode} />
 
         {/* stage */}
@@ -757,7 +859,7 @@ function LiveInner() {
               {art ? <img key={art} src={art} alt="" className="fade-up h-full w-full object-cover" /> : (
                 <div className="relative flex h-full w-full items-center justify-center">
                   <Mascot state={phase === "rj" || speaking ? "talking" : phase === "tuning" || phase === "recovering" ? "tuning" : live ? "live" : "idle"} className="w-[78%]" getLevel={voiceLevel} />
-                  <span className="absolute bottom-1 text-[10px] font-medium uppercase tracking-[0.28em] text-[#f3efe8]/45">{phase === "rj" ? "On air" : live ? "Live" : "MyRJ FM"}</span>
+                  
                 </div>
               )}
             </div>
@@ -782,7 +884,7 @@ function LiveInner() {
             ) : (
               <div className="fade-up">
                 <h1 className="text-[22px] font-semibold tracking-tight sm:text-[26px]">{live ? rjName : `${rjName} is ready`}</h1>
-                <p className="mt-1 text-[14px] text-zinc-500 sm:text-[15px]">{live ? "" : `${MODES.find((m) => m.id === listenMode)!.blurb}. One tap and it never stops.`}</p>
+                <p className="mx-auto mt-1 max-w-[30ch] text-balance text-[14px] text-zinc-500 sm:text-[15px]">{live ? "" : `${MODES.find((m) => m.id === listenMode)!.blurb}. One tap and it never stops.`}</p>
               </div>
             )}
           </div>
@@ -790,7 +892,7 @@ function LiveInner() {
           <div className={cx("mt-4 h-1 w-full overflow-hidden rounded-full bg-white/10 transition-opacity", phase !== "song" && "opacity-0")}>
             <div className={cx("h-full rounded-full bg-white transition-[width] duration-700 ease-linear", phase !== "song" && "opacity-0")} style={{ width: `${progress * 100}%` }} />
           </div>
-          <p className="mt-3 h-4 text-xs text-zinc-500" aria-live="polite">{status}</p>
+          <p className="mt-3 h-4 text-xs text-zinc-500" aria-live="polite">{paused && live ? "Paused" : status}</p>
           {now && (outRef.current === "preview" || phase === "waiting") && now.spotifyUrl && <a href={now.spotifyUrl} target="_blank" rel="noreferrer" className="mt-2 text-xs text-[#1DB954]">Open in Spotify ↗</a>}
         </section>
 
@@ -817,16 +919,24 @@ function LiveInner() {
           {!live ? (
             <button onClick={goLive} className="h-14 w-full rounded-full bg-[#f3efe8] text-[17px] sm:h-16 font-semibold text-black shadow-[0_12px_44px_-14px_rgba(243,239,232,0.18)] transition active:scale-[0.97]">Go Live</button>
           ) : (
-            <>
-              <button onClick={() => stop("Off air. Tap Go Live to tune back in.")} className="glass flex h-14 w-14 shrink-0 items-center sm:h-16 sm:w-16 justify-center rounded-full active:scale-95" aria-label="Stop">
-                <span className="h-4 w-4 rounded-[3px] bg-white" />
+            <div className="flex w-full items-center justify-center gap-8">
+              <button onClick={() => stop("Off air. Tap Go Live to tune back in.")} className="flex h-12 w-12 items-center justify-center rounded-full text-zinc-400 transition hover:text-white active:scale-90" aria-label="Stop, go off air">
+                <span className="h-3.5 w-3.5 rounded-[3px] bg-current" />
               </button>
-              <button onClick={() => skipRef.current()} disabled={phase === "tuning" || phase === "recovering"} className="h-14 flex-1 rounded-full bg-[#f3efe8] text-[16px] sm:h-16 font-semibold text-black transition active:scale-[0.97] disabled:opacity-40">Next</button>
-            </>
+              <button onClick={() => togglePause()} disabled={phase === "tuning" || phase === "recovering"} aria-label={paused ? "Play" : "Pause"} aria-pressed={paused}
+                className="flex h-16 w-16 items-center justify-center rounded-full bg-[#f3efe8] text-[#141210] shadow-[0_12px_44px_-14px_rgba(243,239,232,0.18)] transition active:scale-[0.93] disabled:opacity-40">
+                {paused
+                  ? <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z" /></svg>
+                  : <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden><rect x="6" y="5" width="4" height="14" rx="1.3" /><rect x="14" y="5" width="4" height="14" rx="1.3" /></svg>}
+              </button>
+              <button onClick={next} disabled={phase === "tuning" || phase === "recovering"} className="flex h-12 w-12 items-center justify-center rounded-full text-zinc-400 transition hover:text-white active:scale-90 disabled:opacity-40" aria-label="Next">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M5 6.2v11.6a1 1 0 0 0 1.55.83L15 13v4.5a1 1 0 0 0 2 0v-11a1 1 0 0 0-2 0V11L6.55 5.37A1 1 0 0 0 5 6.2Z" /></svg>
+              </button>
+            </div>
           )}
         </div>
 
-        <button onClick={() => setShowDiag((v) => !v)} className="mt-3 text-[11px] text-zinc-600 hover:text-zinc-400">
+        <button onClick={() => setShowDiag((v) => !v)} className="mt-4 text-[10px] uppercase tracking-[0.14em] text-zinc-700 hover:text-zinc-400">
           {diag.error && live ? "● " : ""}Playback details
         </button>
         {showDiag && (
@@ -868,23 +978,6 @@ function LiveInner() {
 
 export default function Live() {
   return <Suspense><LiveInner /></Suspense>;
-}
-
-/** One-line, 100-char "what are you in the mood for" box. Commits on Enter / blur. */
-function VibeInput({ value, focus, onCommit }: { value: string; focus: boolean; onCommit: (v: string) => void }) {
-  const [v, setV] = useState(value);
-  useEffect(() => setV(value), [value]);
-  return (
-    <form onSubmit={(e) => { e.preventDefault(); (e.currentTarget.elements.namedItem("vibe") as HTMLInputElement)?.blur(); }}
-      className="glass mt-4 flex items-center gap-2 rounded-2xl px-4">
-      <span className="text-xs text-zinc-500">✦</span>
-      <input name="vibe" value={v} maxLength={VIBE_MAX} onChange={(e) => setV(e.target.value)} onBlur={() => onCommit(v)}
-        placeholder={focus ? "lofi bollywood, rainy piano…" : "90s bollywood pls"} aria-label="Vibe request"
-        className="h-11 min-w-0 flex-1 bg-transparent text-base sm:text-sm text-white placeholder:text-zinc-600 focus:outline-none" />
-      {v && <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { setV(""); onCommit(""); }} className="text-xs text-zinc-500 hover:text-white" aria-label="Clear vibe">✕</button>}
-      {v.length > 70 && <span className="text-[10px] tabular-nums text-zinc-600">{VIBE_MAX - v.length}</span>}
-    </form>
-  );
 }
 
 const DOCK_ICONS: Record<ListenMode, React.ReactNode> = {

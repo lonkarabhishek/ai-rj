@@ -134,9 +134,7 @@ const INSTRUMENTAL_GENRE_RE = /lo-?fi|ambient|post-rock|neo-?classical|classical
 let audioFeaturesOk: boolean | null = null; // Spotify blocks audio-features for newer apps; detect once.
 
 export class Curator {
-  constructor(private mode: ListenMode = "default", private seeds: TrackInfo[] = [], private vibe = "") {
-    this.vibe = vibe.trim().slice(0, 100);
-  }
+  constructor(private mode: ListenMode = "default", private seeds: TrackInfo[] = []) {}
   private played = new Set<string>();
   private queue: TrackInfo[] = [];
   private pools: Record<string, TrackInfo[]> = {};
@@ -210,22 +208,6 @@ export class Curator {
     this.artists = artists.map((a: any) => ({ id: a.id, name: a.name, genres: a.genres ?? [] }));
   }
 
-  /** Tracks steered by the listener's free-text vibe request ("90s bollywood pls"), flavoured by mode. */
-  private async vibeTracks(): Promise<TrackInfo[]> {
-    const v = this.vibe.replace(/\b(pls|please|plz|some|songs?|music|play|me|only|yaar|bro)\b/gi, " ").replace(/[^\p{L}\p{N}\s'&-]/gu, " ").replace(/\s+/g, " ").trim();
-    if (!v) return [];
-    const flavour: Record<ListenMode, string[]> = {
-      default: [v, `${v} hits`, `${v} best`],
-      gym: [`${v} workout`, `${v} party`, v],
-      drive: [`${v} road trip`, `${v} hits`, v],
-      focus: [`${v} instrumental`, `${v} lofi`, `${v} piano`, `${v} flute instrumental`],
-    };
-    // Blend with taste: pair the vibe with one of the listener's top artists' genres sometimes.
-    const g = this.mode !== "focus" ? this.artists.flatMap((a) => a.genres).sort(() => Math.random() - 0.5)[0] : undefined;
-    const qs = [...flavour[this.mode], ...(g ? [`${v} ${g}`] : [])].sort(() => Math.random() - 0.5).slice(0, 3);
-    const raw = (await Promise.all(qs.map((q) => this.search(q, 20, 40)))).flat();
-    return this.mode === "focus" ? this.instrumentalOnly(raw) : this.map(raw);
-  }
 
   private async discovery(): Promise<TrackInfo[]> {
     // imported taste seeds guide discovery too: search their artists
@@ -268,9 +250,9 @@ export class Curator {
   private async refill() {
     if (this.mode === "focus") {
       // Focus: instrumental only. Never fall back to vocal favourites.
-      const [vibeT, modeT] = await Promise.all([this.vibeTracks(), this.modeTracks()]);
+      const modeT = await this.modeTracks();
       this.round++;
-      const batch = [...this.take(vibeT, this.vibe ? 8 : 0), ...this.take(modeT, this.vibe ? 4 : 12)].sort(() => Math.random() - 0.5);
+      const batch = [...this.take(modeT, 12)].sort(() => Math.random() - 0.5);
       this.queue.push(...batch);
       if (!batch.length && this.played.size) this.played.clear();
       return;
@@ -278,11 +260,9 @@ export class Curator {
     const poolsEmpty = !Object.values(this.pools).some((p) => p?.length);
     if (this.round === 0 || poolsEmpty) await this.loadBase();
     this.round++;
-    const vibeT = await this.vibeTracks();
-    const hasVibe = vibeT.length > 0;
     if (this.mode !== "default") {
       const modeT = await this.modeTracks();
-      const batch = [...this.take(vibeT, hasVibe ? 6 : 0), ...this.take(modeT, hasVibe ? 4 : 8), ...this.take(this.pools.top, 2), ...this.take(this.pools.saved, 1), ...this.take(this.pools.seeds, 1)].sort(() => Math.random() - 0.5);
+      const batch = [...this.take(modeT, 8), ...this.take(this.pools.top, 2), ...this.take(this.pools.saved, 1), ...this.take(this.pools.seeds, 1)].sort(() => Math.random() - 0.5);
       if (!batch.length) batch.push(...this.take(this.pools.top, 6), ...this.take(this.pools.saved, 6)); // mode search failed: fall back to favourites
       this.queue.push(...batch);
       if (!batch.length && this.played.size) this.played.clear();
@@ -292,12 +272,11 @@ export class Curator {
     let disc: TrackInfo[] = [];
     if (this.round <= 1) { this.discP = this.discovery().catch(() => []); }
     else { disc = await (this.discP ?? this.discovery()); this.discP = this.discovery().catch(() => []); }
-    // Interleave: familiar favourites with ~1/3 discovery; a vibe request takes about half the batch.
+    // Interleave: familiar favourites with ~1/3 discovery.
     const batch = [
-      ...this.take(vibeT, hasVibe ? 7 : 0),
-      ...this.take(this.pools.seeds, this.seeds.length ? (hasVibe ? 1 : 3) : 0),
-      ...this.take(this.pools.top, hasVibe ? 2 : this.seeds.length ? 3 : 4), ...this.take(this.pools.saved, hasVibe ? 1 : 3),
-      ...this.take(this.pools.playlists, hasVibe ? 1 : 3), ...this.take(disc, hasVibe ? 2 : 5),
+      ...this.take(this.pools.seeds, this.seeds.length ? (3) : 0),
+      ...this.take(this.pools.top, this.seeds.length ? 3 : 4), ...this.take(this.pools.saved, 3),
+      ...this.take(this.pools.playlists, 3), ...this.take(disc, 5),
     ].sort(() => Math.random() - 0.5);
     // Avoid two songs by the same artist back to back.
     for (let i = 1; i < batch.length; i++) if (batch[i].artists === batch[i - 1].artists) batch.push(...batch.splice(i, 1));

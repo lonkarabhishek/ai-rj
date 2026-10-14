@@ -12,7 +12,7 @@ export interface SegmentInput {
   kind?: "stinger" | "full" | "switch"; // stinger = one line over the intro; full = a proper break
   withNews?: boolean;
   withJoke?: boolean;
-  vibeChanged?: boolean; // listener just typed a new vibe request // listener's local hour, for time-of-day banter // recent scripts, used to avoid repeating lines
+ // listener's local hour, for time-of-day banter // recent scripts, used to avoid repeating lines
   headlines: Headline[];
 }
 
@@ -134,13 +134,6 @@ function templateInner(input: SegmentInput): string {
   const { prefs, next, index, mode = "default" } = input;
   if (input.kind === "switch") {
     const k: K = prefs.language === "english" ? "en" : prefs.language === "hinglish" ? "hl" : prefs.language === "hindi" ? "hi" : "mr";
-    const v = (prefs.vibe ?? "").trim().slice(0, 100);
-    if (input.vibeChanged) {
-      const V: Record<K, string> = v
-        ? { en: `Got it, ${v}. Coming right up.`, hl: `Done, ${v}. Lagaate hain!`, hi: `ठीक है, ${v}। अभी लाते हैं।`, mr: `ठीक आहे, ${v}. आता लावतो.` }
-        : { en: "Back to your usual mix.", hl: "Wapas aapke usual mix pe.", hi: "वापस आपके मिक्स पर।", mr: "परत तुमच्या मिक्सवर." };
-      return V[k];
-    }
     const L: Record<ListenMode, Record<K, string>> = {
       gym: { en: "Gym mode on. Let's lift!", hl: "Gym mode on! Chalo, utha do!", hi: "जिम मोड ऑन! चलो, जोश दिखाओ!", mr: "जिम मोड ऑन! चला, जोर लावा!" },
       drive: { en: "Driving mode. Windows down, here we go!", hl: "Driving mode on! Seatbelt lagao, chalte hain!", hi: "ड्राइविंग मोड! सीटबेल्ट लगाइए, चलते हैं!", mr: "ड्रायव्हिंग मोड! सीटबेल्ट लावा, निघूया!" },
@@ -252,7 +245,7 @@ How you talk:
 - Energy: ${p.energy} (chill = mellow and warm, balanced = upbeat and friendly, hype = loud, fast, exclamation-heavy).
 - ${HUMOR_RULES[p.humor] ?? HUMOR_RULES.normal}
 - ${MODE_RULES[mode] ?? MODE_RULES.default}
-${p.vibe?.trim() ? `- The listener asked for this vibe: "${p.vibe.trim().slice(0, 100)}"${mode === "focus" ? " (played as instrumentals, since it is Focus mode)" : ""}. The music is steered toward it. Don't keep mentioning it; only nod to it when relevant or when told it just changed.\n` : ""}- Talk about the actual next song and artist like a music lover: a real fact, the mood, the era, or why it fits this moment, mode or time of day. Never invent fake facts; if unsure, talk about the vibe instead.
+- Talk about the actual next song and artist like a music lover: a real fact, the mood, the era, or why it fits this moment, mode or time of day. Never invent fake facts; if unsure, talk about the vibe instead.
 - When headlines are provided, retell one or two conversationally in your own words, like telling a friend, with a quick reaction. Don't read them out verbatim.
 - Segue smoothly from banter into the song; the very last thing you say introduces the next track by name.
 - Use ${p.listenerName}'s name sometimes, not every time.
@@ -288,7 +281,6 @@ export async function llmScript(input: SegmentInput): Promise<string | null> {
     `Break number ${index + 1}. Listener's local time: ${timeOfDay}.`,
     index === 0 ? "This is the show opener: welcome them in." : `Song that just finished: ${trackLine(prev) || "unknown"}.`,
     `Next song to introduce: ${trackLine(next) || "(none yet, just keep them company)"}.`,
-    isSwitch && input.vibeChanged ? `The listener just changed their vibe request to "${(prefs.vibe ?? "").trim().slice(0, 100) || "nothing (back to their usual mix)"}". Say ONE short line (under 14 words) acknowledging it warmly${mode === "focus" ? ", noting you'll keep it instrumental" : ""}, then nothing else. Do not SKIP.` :
     isSwitch ? `The listener just switched to ${mode === "default" ? "My Mix" : mode} mode. Say ONE short, fitting transition line (under 12 words) that acknowledges the switch with the new energy, then nothing else. Do not SKIP.` :
     stinger ? "This is a STINGER: at most ONE short line (under 15 words) said over the song's intro, e.g. a quick fact or vibe about the next song. If you have nothing genuinely interesting, reply SKIP." :
       "This is a full break: 2 to 4 sentences, under 70 words total. Only say things worth saying; if you truly have nothing good, reply SKIP.",
