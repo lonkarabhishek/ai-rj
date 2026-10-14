@@ -65,7 +65,8 @@ export default function Live() {
       try {
         setDiag({ sdk: "loading" });
         await Promise.race([loadSdk(), sleep(10000).then(() => { throw new Error("SDK script timed out"); })]);
-        const player = new window.Spotify.Player({ name: "MyRJ Web Player", getOAuthToken: async (cb: (t: string) => void) => cb((await getToken()) ?? ""), volume: SONG_VOL });
+        const player = new window.Spotify.Player({ name: "MyRJ Web Player", getOAuthToken: async (cb: (t: string) => void) => { const tk = await getToken(); if (!tk) setDiag({ error: "getOAuthToken: /api/spotify/token returned no token, reconnect Spotify" }); cb(tk ?? ""); }, volume: SONG_VOL });
+        player.addListener("autoplay_failed", () => setDiag({ error: "browser blocked autoplay: tap Go Live again" }));
         ["account_error", "authentication_error", "initialization_error", "playback_error"].forEach((e) =>
           player.addListener(e, ({ message }: any) => { sdkErrRef.current = `${e}: ${message}`; setDiag({ sdk: `${e}: ${message}` }); }));
         player.addListener("ready", ({ device_id }: any) => { readyIdRef.current = device_id; setDiag({ sdk: "ready, registering device…" }); });
@@ -155,7 +156,8 @@ export default function Live() {
       setDiag({ sdk: "connecting", device: undefined, error: undefined });
       readyIdRef.current = null;
       setStatus("Starting the in-browser Spotify player…");
-      await player.connect();
+      const ok = await player.connect();
+      if (!ok) setDiag({ sdk: "player.connect() returned false" });
       for (let t = 0; t < 30 && !readyIdRef.current && !sdkErrRef.current; t++) await sleep(500);
       const id = readyIdRef.current;
       if (id) {
