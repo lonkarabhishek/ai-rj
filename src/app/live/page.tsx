@@ -13,7 +13,7 @@ declare global { interface Window { Spotify: any; onSpotifyWebPlaybackSDKReady: 
 type Out = "sdk" | "connect" | "preview" | "none";
 type Phase = "idle" | "tuning" | "rj" | "song" | "waiting" | "recovering";
 interface Diag { account?: string; product?: string; scopes?: string; sdk?: string; device?: string; output?: string; error?: string; log?: string[] }
-interface Segment { script: string; audioUrl: string | null }
+interface Segment { script: string; audioUrl: string | null; lang: string }
 
 const NEEDED = ["streaming", "user-modify-playback-state", "user-read-playback-state"];
 const SONG_VOL = 0.85;
@@ -61,6 +61,7 @@ function LiveInner() {
   const outRef = useRef<Out>("none");
   const curatorRef = useRef<Curator | null>(null);
   const recentRef = useRef<string[]>([]);
+  const ttsQuotaRef = useRef(false);
   const diagRef = useRef<Diag>({ log: [] });
   const wakeRef = useRef<any>(null);
   const chanRef = useRef<BroadcastChannel | null>(null);
@@ -169,6 +170,27 @@ function LiveInner() {
     });
   }
 
+  /** Free fallback voice (Web Speech API) so the RJ still talks when ElevenLabs fails. */
+  function speakBrowser(text: string, lang: string) {
+    return new Promise<void>((resolve) => {
+      const synth = window.speechSynthesis;
+      if (!synth) { log("no browser voice available"); setTimeout(resolve, 3000); return; }
+      synth.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = lang;
+      const vs = synth.getVoices();
+      const v = vs.find((x) => x.lang === lang) ?? vs.find((x) => x.lang.startsWith(lang.slice(0, 2)));
+      if (v) u.voice = v;
+      u.rate = 1.05;
+      let done = false;
+      const finish = () => { if (!done) { done = true; synth.cancel(); resolve(); } };
+      u.onend = finish; u.onerror = finish;
+      skipRef.current = finish;
+      setTimeout(finish, 60000);
+      synth.speak(u);
+    });
+  }
+
   // ---------- RJ segments (never throw: a failed RJ just means more music) ----------
   async function buildSegment(p: Prefs, next: TrackInfo | null, prev: TrackInfo | null, index: number): Promise<Segment | null> {
     try {
@@ -177,11 +199,19 @@ function LiveInner() {
         body: JSON.stringify({ prefs: p, next, prev, index, mode: modeRef.current, recent: recentRef.current.slice(-4) }),
       }).then((r) => { if (!r.ok) throw new Error(`segment ${r.status}`); return r.json(); }), 20000, "segment");
       recentRef.current.push(seg.script);
+      const lang = { english: "en-IN", hinglish: "hi-IN", hindi: "hi-IN", marathi: "mr-IN" }[p.language];
+      if (ttsQuotaRef.current) { log("ElevenLabs credits used up: browser voice"); return { script: seg.script, audioUrl: null, lang }; }
       try {
         const r = await withTimeout(fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: seg.script, voiceId: p.voiceId, energy: p.energy }) }), 30000, "voice");
-        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `tts ${r.status}`);
-        return { script: seg.script, audioUrl: URL.createObjectURL(await r.blob()) };
-      } catch (e) { log(`RJ voice failed, skipping RJ: ${e}`); return { script: seg.script, audioUrl: null }; }
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}));
+          if (j.code === "quota_exceeded") { ttsQuotaRef.current = true; setNotice("ElevenLabs credits are used up, so your RJ is using the browser voice for now."); setTimeout(() => setNotice(null), 6000); }
+          throw new Error(`${j.error ?? `tts ${r.status}`}${j.code ? ` (${j.code})` : ""}`);
+        }
+        const blob = await r.blob();
+        if (!blob.size || !/audio/.test(blob.type)) throw new Error(`voice returned ${blob.type || "nothing"} (${blob.size}B)`);
+        return { script: seg.script, audioUrl: URL.createObjectURL(blob), lang };
+      } catch (e) { log(`RJ voice failed, using browser voice: ${e}`); return { script: seg.script, audioUrl: null, lang }; }
     } catch (e) { log(`RJ script failed: ${e}`); return null; }
   }
 
@@ -369,7 +399,7 @@ function LiveInner() {
           if (!alive(sid)) break;
           if (seg) {
             setScript(seg.script);
-            if (seg.audioUrl) await playClip(seg.audioUrl, { maxMs: 90000 }); else await sleep(2500);
+            if (seg.audioUrl) await playClip(seg.audioUrl, { maxMs: 90000 }); else await speakBrowser(seg.script, seg.lang);
           }
         }
         if (!alive(sid)) break;

@@ -104,7 +104,7 @@ function templateInner({ prefs, next, index, headlines, mode = "default" }: Segm
   const { rjName, listenerName: me, language, humor, energy } = prefs;
   const hype = energy === "hype" ? "!" : ".";
   const joke = jokeFor(humor, language);
-  const news = index % 2 === 0 ? headlines.slice(0, 2) : [];
+  const news = (index % 2 === 0 ? headlines.slice(0, 1) : []).map((h) => ({ ...h, title: h.title.length > 110 ? h.title.slice(0, 110).replace(/\s\S*$/, "") : h.title }));
   const tl = trackLine(next);
   const parts: string[] = [];
   const k = language === "english" ? "en" : language === "hinglish" ? "hl" : language === "hindi" ? "hi" : "mr";
