@@ -9,11 +9,12 @@ import { AllPrefs, usePrefs } from "@/components/prefs";
 import { cx, Spinner } from "@/components/ui";
 import { Lyrics } from "@/components/Lyrics";
 
+const SILENT_WAV = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
 declare global { interface Window { Spotify: any; onSpotifyWebPlaybackSDKReady: () => void } }
 
 type Out = "sdk" | "connect" | "preview" | "none";
 type Phase = "idle" | "tuning" | "rj" | "song" | "waiting" | "recovering";
-interface Diag { account?: string; product?: string; scopes?: string; sdk?: string; device?: string; output?: string; error?: string; log?: string[] }
+interface Diag { account?: string; product?: string; scopes?: string; sdk?: string; device?: string; output?: string; error?: string; voice?: string; script?: string; audio?: string; log?: string[] }
 type BreakKind = "none" | "stinger" | "full" | "switch";
 interface Plan { kind: BreakKind; withNews?: boolean; withJoke?: boolean; vibeChanged?: boolean }
 interface Segment { script: string; audioUrl: string | null; lang: string; kind: BreakKind }
@@ -63,6 +64,9 @@ function LiveInner() {
   const deviceRef = useRef<string | null>(null);
   const connectDeviceRef = useRef<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const voiceElRef = useRef<HTMLAudioElement | null>(null); // ONE element, unlocked on a tap, reused for every clip (iOS autoplay)
+  const clipIdRef = useRef(0);
+  const blockedRef = useRef<(() => void) | null>(null); // a clip the browser blocked; retried on the next tap
   const modeRef = useRef<ListenMode>("default");
   const outRef = useRef<Out>("none");
   const curatorRef = useRef<Curator | null>(null);
@@ -77,6 +81,7 @@ function LiveInner() {
   const wakeRef = useRef<any>(null);
   const chanRef = useRef<BroadcastChannel | null>(null);
   const tabId = useRef(Math.random().toString(36).slice(2));
+  const speechUnlockedRef = useRef(false);
 
   const setDiag = (d: Partial<Diag>) => { diagRef.current = { ...diagRef.current, ...d }; setDiagState(diagRef.current); };
   const log = (m: string) => {
@@ -130,13 +135,16 @@ function LiveInner() {
     };
     const onOffline = () => setNotice("You're offline. MyRJ will pick up where it left off.");
     const onOnline = () => { setNotice(null); log("back online"); };
-    const onVis = () => { if (document.visibilityState === "visible" && phaseRef.current !== "idle") requestWake(); };
+    const onVis = () => { if (document.visibilityState === "visible" && phaseRef.current !== "idle") { requestWake(); if (ctxRef.current && ctxRef.current.state !== "running") ctxRef.current.resume().catch(() => {}); } };
+    const onTap = () => unlockAudio(); // every tap re-unlocks (covers autostart after onboarding, and blocked clips)
+    window.addEventListener("pointerdown", onTap); window.addEventListener("touchend", onTap);
     window.addEventListener("offline", onOffline); window.addEventListener("online", onOnline);
     document.addEventListener("visibilitychange", onVis);
     return () => {
       sessionRef.current++; playerRef.current?.disconnect(); audioRef.current?.pause(); chan?.close();
       window.removeEventListener("offline", onOffline); window.removeEventListener("online", onOnline);
       document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("pointerdown", onTap); window.removeEventListener("touchend", onTap);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -207,17 +215,57 @@ function LiveInner() {
     const from = (await pl.getVolume().catch(() => SONG_VOL)) as number, steps = 10;
     for (let i = 1; i <= steps; i++) { await pl.setVolume(Math.max(0.0001, from + (to - from) * (i / steps))).catch(() => {}); await sleep(ms / steps); }
   }
+  /** Must run inside a user tap: unlocks the shared audio element, Web Audio and speech synthesis (iOS/Safari). */
+  function unlockAudio() {
+    try {
+      let a = voiceElRef.current;
+      if (!a) {
+        a = new Audio(); a.preload = "auto"; (a as any).playsInline = true; a.setAttribute("playsinline", ""); a.setAttribute("webkit-playsinline", "");
+        voiceElRef.current = a;
+      }
+      if (a.paused && !a.src.startsWith("blob:") && !a.src.startsWith("http")) { a.src = SILENT_WAV; a.play().catch(() => {}); }
+    } catch { /* ignore */ }
+    try {
+      const c = ac();
+      const b = c.createBuffer(1, 1, 22050), src = c.createBufferSource(); src.buffer = b; src.connect(c.destination); src.start(0);
+    } catch { /* no web audio */ }
+    try {
+      const synth = window.speechSynthesis;
+      if (synth && !speechUnlockedRef.current) { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; synth.speak(u); speechUnlockedRef.current = true; }
+    } catch { /* ignore */ }
+    const retry = blockedRef.current; blockedRef.current = null; retry?.();
+  }
+
   function playClip(url: string, opts: { maxMs?: number; fadeIn?: boolean; bindSkip?: boolean; voice?: boolean } = {}) {
     return new Promise<void>((resolve) => {
-      const a = new Audio(url); audioRef.current = a; a.volume = opts.fadeIn ? 0 : 1;
+      const id = ++clipIdRef.current;
+      let a = voiceElRef.current;
+      if (!a) { a = new Audio(); (a as any).playsInline = true; a.setAttribute("playsinline", ""); voiceElRef.current = a; }
+      a.onended = a.onerror = a.ontimeupdate = null;
+      a.pause(); a.src = url; audioRef.current = a; a.volume = opts.fadeIn ? 0 : 1;
       if (opts.voice) voiceClockRef.current = () => [a.currentTime, Number.isFinite(a.duration) ? a.duration : 0];
       let done = false;
-      const finish = async (fade = false) => { if (done) return; done = true; if (fade) await fadeEl(a, 0, 900); a.pause(); resolve(); };
-      a.onended = () => finish(); a.onerror = () => finish();
+      const finish = async (fade = false) => {
+        if (done) return; done = true; blockedRef.current = null;
+        if (clipIdRef.current === id) { if (fade) await fadeEl(a!, 0, 900); if (clipIdRef.current === id) a!.pause(); }
+        resolve();
+      };
+      a.onended = () => finish();
+      a.onerror = () => { const msg = `audio error ${a!.error?.code ?? "?"} ${a!.error?.message ?? ""}`.trim(); log(msg); setDiag({ audio: msg }); finish(); };
       if (opts.bindSkip !== false) a.ontimeupdate = () => { if (a.duration) setProgress(a.currentTime / a.duration); };
       if (opts.bindSkip !== false) skipRef.current = () => finish(true);
       setTimeout(() => finish(true), opts.maxMs ?? 120000); // safety: never hang on a clip
-      a.play().then(() => { if (opts.fadeIn) fadeEl(a, 1, 1500); }).catch((e) => { log(`audio blocked: ${e?.name ?? e}`); setNotice("Tap anywhere to allow audio."); finish(); });
+      const start = () => a!.play().then(() => { setDiag({ audio: "ok" }); if (opts.fadeIn) fadeEl(a!, 1, 1500); });
+      start().catch((e) => {
+        if (done) return;
+        const msg = `audio blocked: ${e?.name ?? e}`; log(msg); setDiag({ audio: msg });
+        if (e?.name === "NotAllowedError") {
+          // iOS: wait for one tap, then play this same clip (don't drop the RJ line)
+          setNotice("Tap anywhere to allow audio.");
+          blockedRef.current = () => { setNotice(null); start().catch(() => finish()); };
+          setTimeout(() => { if (blockedRef.current) finish(); }, 20000);
+        } else finish();
+      });
     });
   }
 
@@ -225,8 +273,12 @@ function LiveInner() {
   const ctxRef = useRef<AudioContext | null>(null);
   const bedRef = useRef<{ stop: () => void } | null>(null);
   function ac() {
-    if (!ctxRef.current) ctxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-    if (ctxRef.current.state === "suspended") ctxRef.current.resume().catch(() => {});
+    if (!ctxRef.current) {
+      const c: AudioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      c.onstatechange = () => { if ((c.state as string) === "interrupted" || (c.state === "suspended" && phaseRef.current !== "idle")) c.resume().catch(() => {}); };
+      ctxRef.current = c;
+    }
+    if (ctxRef.current.state !== "running") ctxRef.current.resume().catch(() => {});
     return ctxRef.current;
   }
   /** Short whoosh + chime sweeper, flavored by mode. ~0.9s. */
@@ -272,6 +324,7 @@ function LiveInner() {
     return new Promise<void>((resolve) => {
       const synth = window.speechSynthesis;
       if (!synth) { log("no browser voice available"); setTimeout(resolve, 3000); return; }
+      if (synth.paused) synth.resume();
       synth.cancel();
       const t0 = Date.now(), est = Math.max(2, [...text].length / 13);
       voiceClockRef.current = () => [(Date.now() - t0) / 1000, est];
@@ -286,7 +339,8 @@ function LiveInner() {
       parts.forEach((t, i) => {
         const u = new SpeechSynthesisUtterance(t);
         u.lang = lang; if (v) u.voice = v; u.rate = 1.05;
-        if (i === parts.length - 1) { u.onend = finish; u.onerror = finish; }
+        u.onerror = (ev) => { log(`browser voice error: ${ev.error}`); setDiag({ voice: `browser voice: ${ev.error}` }); if (i === parts.length - 1) finish(); };
+        if (i === parts.length - 1) u.onend = finish;
         synth.speak(u);
       });
     });
@@ -299,7 +353,8 @@ function LiveInner() {
       const seg = await withTimeout(fetch("/api/segment", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prefs: p, next, prev, index, mode: modeRef.current, recent: recentRef.current.slice(-4), hour: new Date().getHours(), kind: plan.kind, withNews: !!plan.withNews, withJoke: !!plan.withJoke, vibeChanged: !!plan.vibeChanged }),
-      }).then((r) => { if (!r.ok) throw new Error(`segment ${r.status}`); return r.json(); }), 20000, "segment");
+      }).then(async (r) => { if (!r.ok) throw new Error(`segment ${r.status} ${(await r.text().catch(() => "")).slice(0, 120)}`); return r.json(); }), 20000, "segment");
+      setDiag({ script: `${seg.mode ?? "?"} ok` });
       if (!seg.script) { log(`RJ chose silence (${plan.kind})`); return null; }
       recentRef.current.push(seg.script);
       if (plan.withNews && seg.headlines?.length) lastNewsRef.current = Date.now();
@@ -316,9 +371,10 @@ function LiveInner() {
         if (fb) log(`voice: ${prov} (fallback after ${fb})`);
         const blob = await r.blob();
         if (!blob.size || !/audio/.test(blob.type)) throw new Error(`voice returned ${blob.type || "nothing"} (${blob.size}B)`);
+        setDiag({ voice: `${prov ?? "ok"} ${Math.round(blob.size / 1024)}KB${fb ? ` (fallback after ${fb})` : ""}` });
         return { script: seg.script, audioUrl: URL.createObjectURL(blob), lang, kind: plan.kind };
-      } catch (e) { log(`RJ voice failed, using browser voice: ${e}`); return { script: seg.script, audioUrl: null, lang, kind: plan.kind }; }
-    } catch (e) { log(`RJ script failed: ${e}`); return null; }
+      } catch (e) { log(`RJ voice failed, using browser voice: ${e}`); setDiag({ voice: `failed: ${String(e).slice(0, 160)}` }); return { script: seg.script, audioUrl: null, lang, kind: plan.kind }; }
+    } catch (e) { log(`RJ script failed: ${e}`); setDiag({ script: `failed: ${String(e).slice(0, 160)}` }); return null; }
   }
 
   // ---------- spotify outputs ----------
@@ -510,8 +566,7 @@ function LiveInner() {
   // ---------- main loop: one iteration per song; every failure is caught and recovered ----------
   async function goLive() {
     playerRef.current?.activateElement?.(); // must happen inside the tap
-    new Audio().play().catch(() => {});
-    ac();
+    unlockAudio();
     const p = effPrefs();
     if (!p.voiceId) { window.location.href = "/welcome?step=voice"; return; }
     const sid = ++sessionRef.current;
@@ -714,6 +769,9 @@ function LiveInner() {
               <dt>scopes</dt><dd>{diag.scopes ?? "-"}</dd>
               <dt>web player</dt><dd>{diag.sdk ?? "-"}</dd>
               <dt>device</dt><dd>{diag.device ?? "-"}</dd>
+              <dt>rj script</dt><dd className={cx("break-words", diag.script?.startsWith("failed") && "text-red-300")}>{diag.script ?? "-"}</dd>
+              <dt>rj voice</dt><dd className={cx("break-words", diag.voice?.startsWith("failed") && "text-red-300")}>{diag.voice ?? "-"}</dd>
+              <dt>audio</dt><dd className={cx("break-words", diag.audio && diag.audio !== "ok" && "text-red-300")}>{diag.audio ?? "-"}</dd>
               {diag.error && <><dt className="text-red-400">error</dt><dd className="break-words text-red-300">{diag.error}</dd></>}
             </dl>
             {!!diag.log?.length && <pre className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap text-zinc-500">{diag.log.slice(-10).join("\n")}</pre>}
