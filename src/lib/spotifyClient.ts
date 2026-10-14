@@ -58,7 +58,11 @@ function release() { inFlight--; waiters.shift()?.(); }
 export async function sp<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
-    if (Date.now() < blockedUntil) throw new SpotifyError(429, `backing off ${Math.ceil(spotifyBackoffMs() / 1000)}s`);
+    // Inside a backoff window: short windows are waited out (no request is made meanwhile), long ones fail fast.
+    if (Date.now() < blockedUntil) {
+      if (spotifyBackoffMs() > 10000) throw new SpotifyError(429, `backing off ${Math.ceil(spotifyBackoffMs() / 1000)}s`);
+      await wait(spotifyBackoffMs() + Math.random() * 300);
+    }
     const token = await getToken(attempt > 0 && lastErr instanceof SpotifyError && lastErr.status === 401);
     if (!token) throw new SpotifyError(401, "not connected");
     let r: Response;
@@ -79,6 +83,7 @@ export async function sp<T = unknown>(path: string, init: RequestInit = {}): Pro
       const ra = Number(r.headers.get("Retry-After"));
       blockedUntil = Math.max(blockedUntil, Date.now() + (Number.isFinite(ra) && ra > 0 ? ra : 5) * 1000);
       announce();
+      if (attempt === 0 && spotifyBackoffMs() <= 10000) continue; // short Retry-After: wait it out once, then retry
       throw lastErr;
     }
     if (r.status >= 500) { await wait(1000 * 2 ** attempt); continue; }
@@ -219,14 +224,18 @@ export class Curator {
   }
   private async langTracks(flavour: string[] = [""]): Promise<TrackInfo[]> {
     if (!this.langs.length) return [];
-    const qs: string[] = [];
+    const per: string[][] = [];
     for (const l of this.langs) {
+      const qs: string[] = []; per.push(qs);
       const T = LANG_TERMS[l];
       const base = this.mode === "focus" ? T.focus : T.q;
       const picks = [...base].sort(() => Math.random() - 0.5).slice(0, this.mode === "focus" ? 2 : 1);
       for (const b of picks) qs.push(`${b} ${this.mode === "focus" ? "" : flavour[Math.floor(Math.random() * flavour.length)]}`.trim());
       if (this.mode !== "focus" && Math.random() < 0.5) qs.push(`genre:"${T.genre[Math.floor(Math.random() * T.genre.length)]}"`);
     }
+    // Round-robin across languages so every chosen language gets searched within the budget.
+    const qs: string[] = [];
+    for (let i = 0; per.some((x) => x[i]); i++) for (const x of per) if (x[i]) qs.push(x[i]);
     const raw = (await Promise.all(qs.slice(0, 5).map((q) => this.search(q, 20, this.mode === "focus" ? 20 : 60)))).flat();
     if (this.mode === "focus") return this.instrumentalOnly(raw);
     return this.byLang(this.map(raw), true);
@@ -242,14 +251,15 @@ export class Curator {
     try { return await fn(); } catch { return []; }
   }
   private map(items: any[]) { return items.map(toTrack).filter(Boolean) as TrackInfo[]; }
-  private searchBudget = 6; // searches per queue build
-  private async search(q: string, _limit = 10, maxOffset = 60): Promise<any[]> {
+  private searchBudget = 6; // searches per queue build (language/mode searches)
+  private discBudget = 3;   // discovery searches per queue build, kept separate so they never starve the language searches
+  private async search(q: string, _limit = 10, maxOffset = 60, disc = false): Promise<any[]> {
     // One 10-result page (Spotify's cap), offsets on a coarse grid so the cache hits; results cached for 6h.
     const off = maxOffset ? 10 * Math.floor(Math.random() * Math.min(3, maxOffset / 10 + 1)) : 0;
     const key = `myrj.sq.${q}|${off}`;
     try { const c = JSON.parse(localStorage.getItem(key) ?? "null"); if (c && Date.now() - c.at < 6 * 3600e3) return c.items; } catch { /* ignore */ }
-    if (this.searchBudget <= 0 || spotifyBackoffMs() > 0) return [];
-    this.searchBudget--;
+    if ((disc ? this.discBudget : this.searchBudget) <= 0 || spotifyBackoffMs() > 10000) return [];
+    if (disc) this.discBudget--; else this.searchBudget--;
     try {
       const items = (await sp<any>(`/search?type=track&limit=10&offset=${off}&q=${encodeURIComponent(q)}`)).tracks?.items ?? [];
       try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), items: items.map(slim) })); } catch { pruneSearchCache(); }
@@ -317,14 +327,14 @@ export class Curator {
     // imported taste seeds guide discovery too: search their artists
     const seedArtists = [...new Set(this.seeds.map((t) => t.artists.split(",")[0].trim()))].sort(() => Math.random() - 0.5).slice(0, 2);
     const viaSeeds = (await Promise.all(seedArtists.map((a) => this.safe(async () =>
-      this.map(await this.search(`artist:${a}`, 10, 0)))))).flat();
+      this.map(await this.search(`artist:${a}`, 10, 0, true)))))).flat();
     if (!this.artists.length) return viaSeeds;
     const shuffled = [...this.artists].sort(() => Math.random() - 0.5).slice(0, 2);
     const results = await Promise.all(shuffled.map(async (a) => {
       const viaTop = await this.safe(async () => this.map((await sp<any>(`/artists/${a.id}/top-tracks?market=from_token`)).tracks ?? []));
       const genre = a.genres[Math.floor(Math.random() * a.genres.length)];
       const q = genre ? `genre:"${genre}"` : a.name;
-      const viaSearch = this.map(await this.search(q, 10, 20));
+      const viaSearch = this.map(await this.search(q, 10, 20, true));
       return [...viaTop.slice(0, 4), ...viaSearch];
     }));
     return [...viaSeeds, ...results.flat()];
@@ -352,7 +362,7 @@ export class Curator {
   }
 
   private async refill() {
-    this.searchBudget = 6;
+    this.searchBudget = 6; this.discBudget = 3;
     if (this.mode === "focus") {
       // Focus: instrumental only. Never fall back to vocal favourites. With song languages: instrumental takes on them.
       const modeT = this.langs.length ? await this.langTracks() : await this.modeTracks();
