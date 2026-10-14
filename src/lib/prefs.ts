@@ -59,3 +59,11 @@ export interface TrackInfo {
   spotifyUrl?: string;
   image?: string;
 }
+
+export type ListenMode = "default" | "gym" | "drive" | "focus";
+export const MODES: { id: ListenMode; label: string; emoji: string; blurb: string; talkEvery: number; energy?: Energy }[] = [
+  { id: "default", label: "My Mix", emoji: "📻", blurb: "Your favourites + discoveries", talkEvery: 1 },
+  { id: "gym", label: "Gym", emoji: "🏋️", blurb: "High-energy, hype RJ", talkEvery: 1, energy: "hype" },
+  { id: "drive", label: "Driving", emoji: "🚗", blurb: "Road-trip singalongs", talkEvery: 1, energy: "hype" },
+  { id: "focus", label: "Work / Focus", emoji: "🎧", blurb: "Instrumental, RJ stays quiet", talkEvery: 4, energy: "chill" },
+];

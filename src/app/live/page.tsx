@@ -2,7 +2,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { loadPrefs, type Prefs, type TrackInfo } from "@/lib/prefs";
+import { loadPrefs, MODES, type ListenMode, type Prefs, type TrackInfo } from "@/lib/prefs";
 import { Curator, getMe, getToken, sp } from "@/lib/spotifyClient";
 
 declare global { interface Window { Spotify: any; onSpotifyWebPlaybackSDKReady: () => void } }
@@ -27,6 +27,7 @@ export default function Live() {
   const [now, setNow] = useState<TrackInfo | null>(null);
   const [mode, setMode] = useState<Mode>("none");
   const [live, setLive] = useState(false);
+  const [listenMode, setListenMode] = useState<ListenMode>("default");
   const stopRef = useRef(false);
   const skipRef = useRef<() => void>(() => {});
   const playerRef = useRef<any>(null);
@@ -100,20 +101,23 @@ export default function Live() {
   }
 
   async function goLive() {
-    const p = loadPrefs(); setPrefs(p);
+    const base = loadPrefs(); setPrefs(base);
+    const md = MODES.find((x) => x.id === listenMode)!;
+    const p: Prefs = { ...base, energy: md.energy ?? base.energy };
     if (!p.voiceId) { setStatus("Pick a voice in Settings first."); return; }
     stopRef.current = false; setLive(true);
     setStatus("Tuning in…");
     // unlock audio on this user gesture
     new Audio().play().catch(() => {});
     const m = await setupSpotify(); setMode(m);
-    const curator = m !== "none" ? new Curator() : null;
+    const curator = m !== "none" ? new Curator(listenMode) : null;
     let prev: TrackInfo | null = null;
     let next: TrackInfo | null = curator ? await curator.next() : null;
     for (let i = 0; !stopRef.current; i++) {
-      setStatus(`${p.rjName} is warming up the mic…`);
-      try {
-        const seg = await fetch("/api/segment", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prefs: p, next, prev, index: i }) }).then((r) => r.json());
+      const talk = i === 0 || i % md.talkEvery === 0;
+      if (talk) try {
+        setStatus(`${p.rjName} is warming up the mic…`);
+        const seg = await fetch("/api/segment", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prefs: p, next, prev, index: i, mode: listenMode }) }).then((r) => r.json());
         setScript(seg.script); setNow(null);
         setStatus(`${p.rjName} on air`);
         await speak(seg.script, p);
@@ -145,6 +149,15 @@ export default function Live() {
           {now.image && <img src={now.image} alt="" className="h-14 w-14 rounded" />}
           <div className="flex-1 min-w-0"><p className="font-semibold truncate">{now.name}</p><p className="text-sm text-zinc-400 truncate">{now.artists}</p></div>
           {mode !== "sdk" && now.spotifyUrl && <a href={now.spotifyUrl} target="_blank" rel="noreferrer" className="text-xs text-green-400 underline">Open in Spotify</a>}
+        </div>
+      )}
+      {!live && (
+        <div className="grid grid-cols-2 gap-2 w-full">
+          {MODES.map((x) => (
+            <button key={x.id} onClick={() => setListenMode(x.id)} className={`rounded-xl border p-3 text-left ${listenMode === x.id ? "border-fuchsia-500 bg-fuchsia-950/50" : "border-zinc-800 hover:border-zinc-600"}`}>
+              <div className="font-semibold">{x.emoji} {x.label}</div><div className="text-xs text-zinc-400">{x.blurb}</div>
+            </button>
+          ))}
         </div>
       )}
       <div className="flex gap-3">

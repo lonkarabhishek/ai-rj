@@ -1,4 +1,4 @@
-import type { Prefs, TrackInfo, Humor, Language } from "./prefs";
+import type { Prefs, TrackInfo, Humor, Language, ListenMode } from "./prefs";
 import type { Headline } from "./news";
 
 export interface SegmentInput {
@@ -6,6 +6,7 @@ export interface SegmentInput {
   next?: TrackInfo | null;
   prev?: TrackInfo | null;
   index: number;
+  mode?: ListenMode;
   headlines: Headline[];
 }
 
@@ -45,7 +46,38 @@ function trackLine(t?: TrackInfo | null) {
   return t ? `"${t.name}" by ${t.artists}` : "";
 }
 
-export function templateScript({ prefs, next, index, headlines }: SegmentInput): string {
+const MODE_LINES: Record<"gym" | "drive" | "focus", Record<"en" | "hi" | "hl" | "mr", string[]>> = {
+  gym: {
+    en: ["One more rep, {me}. Pain is temporary, gains are forever!", "No excuses today, {me}. Let's crush this set!", "Breathe, brace, and lift, {me}. You've got this!"],
+    hl: ["Ek aur rep, {me}! Dard temporary hai, gains permanent!", "Aaj koi excuse nahi, {me}. Set todo!", "Saans lo, focus karo, aur utha do, {me}!"],
+    hi: ["एक और रेप, {me}! दर्द कुछ पल का है, ताकत हमेशा की!", "आज कोई बहाना नहीं, {me}। ये सेट तोड़ दो!"],
+    mr: ["अजून एक रेप, {me}! वेदना क्षणभर, ताकद कायमची!", "आज कोणतीही सबब नाही, {me}. हा सेट फोडून टाका!"],
+  },
+  drive: {
+    en: ["Windows down, volume up, {me}. Sing it like nobody's listening!", "Road's open, {me}. This one's a singalong, don't hold back!"],
+    hl: ["Windows neeche, volume upar, {me}! Gaana zor se gaana!", "Road khula hai, {me}. Is gaane pe singalong compulsory hai!"],
+    hi: ["खिड़कियाँ नीचे, आवाज़ ऊपर, {me}! ज़ोर से गाइए!", "सड़क खुली है, {me}। इस गाने पर साथ में गाना ज़रूरी है!"],
+    mr: ["खिडक्या खाली, आवाज वर, {me}! मोठ्याने गा!", "रस्ता मोकळा आहे, {me}. या गाण्यावर सोबत गायलंच पाहिजे!"],
+  },
+  focus: {
+    en: ["Staying in the zone with {track}.", "Deep work continues, {me}. Next up, {track}."],
+    hl: ["Focus mode on, {me}. Ab {track}.", "Zone mein raho, {me}. Next, {track}."],
+    hi: ["फोकस बनाए रखिए, {me}। अब {track}।"],
+    mr: ["लक्ष केंद्रित ठेवा, {me}. आता {track}."],
+  },
+};
+
+export function templateScript({ prefs, next, index, headlines, mode = "default" }: SegmentInput): string {
+  if (mode !== "default") {
+    const k = prefs.language === "english" ? "en" : prefs.language === "hinglish" ? "hl" : prefs.language === "hindi" ? "hi" : "mr";
+    const fill = (x: string) => x.replace("{me}", prefs.listenerName).replace("{track}", trackLine(next) || "the next one");
+    const line = fill(pick(MODE_LINES[mode][k]));
+    if (mode === "focus") return line;
+    const extra = mode === "drive" && prefs.humor !== "off" && index % 2 === 1 ? " " + jokeFor(prefs.humor, prefs.language) : "";
+    const tl = trackLine(next);
+    const intro = index === 0 ? `${prefs.rjName} ${k === "en" ? "here" : k === "hl" ? "aa gaya" : k === "hi" ? "हाज़िर है" : "आला"}! ` : "";
+    return `${intro}${line}${extra}${tl ? ` ${tl}!` : ""}`;
+  }
   const { rjName, listenerName: me, language, humor, energy } = prefs;
   const hype = energy === "hype" ? "!" : ".";
   const joke = jokeFor(humor, language);
@@ -89,12 +121,15 @@ export async function llmScript(input: SegmentInput): Promise<string | null> {
   const base = process.env.LLM_BASE_URL || "https://api.openai.com/v1";
   const model = process.env.LLM_MODEL || "gpt-4o-mini";
   const { prefs, next, prev, index, headlines } = input;
-  const sys = `You are ${prefs.rjName}, a radio jockey for one listener named ${prefs.listenerName}. Speak only in ${prefs.language} (Hindi/Marathi in Devanagari; Hinglish in Roman script). Energy: ${prefs.energy}. Humor style: ${prefs.humor}. Output only the spoken words, 40-80 words, no stage directions, no emojis.`;
+  const sys = `You are ${prefs.rjName}, a radio jockey for one listener named ${prefs.listenerName}. Speak only in ${prefs.language} (Hindi/Marathi in Devanagari; Hinglish in Roman script). Energy: ${prefs.energy}. Humor style: ${prefs.humor}. Output only the spoken words, no stage directions, no emojis. ${
+    input.mode === "gym" ? "Listening mode: GYM. Be a hype coach: short punchy motivational lines, max 30 words." :
+    input.mode === "drive" ? "Listening mode: DRIVING. Playful road-trip buddy vibe, encourage singing along, max 45 words." :
+    input.mode === "focus" ? "Listening mode: WORK/FOCUS. Calm, minimal, max 12 words, just name the next track." : "40-80 words."}`;
   const user = [
     index === 0 ? "This is the show opener." : `Previous song: ${trackLine(prev) || "none"}.`,
     `Next song: ${trackLine(next) || "none"}.`,
-    index % 2 === 0 && headlines.length ? `Mention 1-2 of these headlines briefly: ${headlines.slice(0, 4).map((h) => h.title).join(" | ")}` : "No news this time.",
-    prefs.humor !== "off" ? "Include one short joke in the listener's humor style." : "No jokes.",
+    input.mode && input.mode !== "default" ? "No news." : index % 2 === 0 && headlines.length ? `Mention 1-2 of these headlines briefly: ${headlines.slice(0, 4).map((h) => h.title).join(" | ")}` : "No news this time.",
+    input.mode === "gym" || input.mode === "focus" ? "No jokes." : prefs.humor !== "off" ? "Include one short joke in the listener's humor style." : "No jokes.",
   ].join("\n");
   try {
     const res = await fetch(`${base}/chat/completions`, {

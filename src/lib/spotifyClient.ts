@@ -1,5 +1,5 @@
 "use client";
-import type { TrackInfo } from "./prefs";
+import type { ListenMode, TrackInfo } from "./prefs";
 
 export async function getToken(): Promise<string | null> {
   const r = await fetch("/api/spotify/token", { cache: "no-store" });
@@ -62,7 +62,14 @@ export async function getTracks(source: string): Promise<TrackInfo[]> {
  * the user's playlists, and discovery (top artists' top tracks + genre/artist searches).
  * Each source is wrapped in try/catch since Spotify restricts some endpoints for dev-mode apps.
  */
+const MODE_QUERIES: Record<Exclude<ListenMode, "default">, string[]> = {
+  gym: ["workout motivation", "gym hype", "beast mode", "running anthems", "bollywood workout", "edm workout", "hip hop workout"],
+  drive: ["road trip singalong", "bollywood road trip", "feel good hits", "summer drive", "punjabi party", "throwback singalong"],
+  focus: ["lofi beats", "instrumental focus", "deep focus", "piano focus", "ambient study", "lofi hindi instrumental", "chillhop"],
+};
+
 export class Curator {
+  constructor(private mode: ListenMode = "default") {}
   private played = new Set<string>();
   private queue: TrackInfo[] = [];
   private pools: Record<string, TrackInfo[]> = {};
@@ -113,9 +120,32 @@ export class Curator {
     return fresh.sort(() => Math.random() - 0.5).slice(0, n);
   }
 
+  private async modeTracks(): Promise<TrackInfo[]> {
+    if (this.mode === "default") return [];
+    const qs = [...MODE_QUERIES[this.mode]].sort(() => Math.random() - 0.5).slice(0, 3);
+    const res = await Promise.all(qs.map((q) => this.safe(async () =>
+      this.map((await sp<any>(`/search?type=track&limit=20&offset=${Math.floor(Math.random() * 60)}&q=${encodeURIComponent(q)}`)).tracks?.items ?? []))));
+    let tracks = res.flat();
+    if (this.mode === "focus") {
+      // No audio-features for new apps: keep tracks that look instrumental/lofi by name, else trust the query.
+      const looks = tracks.filter((t) => /lo-?fi|instrumental|piano|ambient|beats|study|focus|chill/i.test(`${t.name} ${t.artists}`));
+      if (looks.length >= 5) tracks = looks;
+    }
+    return tracks;
+  }
+
   private async refill() {
-    if (this.round === 0) await this.loadBase();
+    if (this.round === 0 && this.mode !== "focus") await this.loadBase();
     this.round++;
+    if (this.mode !== "default") {
+      const modeT = await this.modeTracks();
+      const batch = this.mode === "focus"
+        ? this.take(modeT, 12) // focus: only instrumental-style tracks, no lyrics-heavy favourites
+        : [...this.take(modeT, 8), ...this.take(this.pools.top, 2), ...this.take(this.pools.saved, 2)].sort(() => Math.random() - 0.5);
+      this.queue.push(...batch);
+      if (!batch.length && this.played.size) this.played.clear();
+      return;
+    }
     const disc = await this.discovery();
     // Interleave: familiar favourites with ~1/3 discovery.
     const batch = [

@@ -4,7 +4,7 @@ import { llmScript, templateScript, type SegmentInput } from "@/lib/script";
 export async function POST(req: Request) {
   const body = (await req.json()) as Omit<SegmentInput, "headlines">;
   const { prefs, index } = body;
-  const headlines = index % 2 === 0 && prefs.newsTopics?.length ? await fetchHeadlines(prefs.newsTopics, prefs.language, 2) : [];
+  const headlines = (!body.mode || body.mode === "default") && index % 2 === 0 && prefs.newsTopics?.length ? await fetchHeadlines(prefs.newsTopics, prefs.language, 2) : [];
   // shuffle so repeated segments vary
   headlines.sort(() => Math.random() - 0.5);
   const input = { ...body, headlines };
