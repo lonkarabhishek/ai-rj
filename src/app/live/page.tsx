@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { isOnboarded, loadPrefs, MODES, savePrefs, type ListenMode, type Prefs, type TrackInfo } from "@/lib/prefs";
-import { Curator, getMe, getToken, getTokenInfo, sp, spotifyBackoffMs, SpotifyError } from "@/lib/spotifyClient";
+import { clearSpotifyBackoff, Curator, getMe, limitedEndpoint, quotaExceeded, getToken, getTokenInfo, sp, spotifyBackoffMs, SpotifyError } from "@/lib/spotifyClient";
 import { AllPrefs, SongLangPicker, TalkToggles, usePrefs } from "@/components/prefs";
 import { cx, Spinner } from "@/components/ui";
 import { Lyrics } from "@/components/Lyrics";
@@ -149,8 +149,14 @@ function LiveInner() {
     const onOffline = () => setNotice("You're offline. MyRJ will pick up where it left off.");
     let boTimer: ReturnType<typeof setInterval> | null = null;
     const onBackoff = () => {
-      log(`Spotify rate limit: backing off ${Math.ceil(spotifyBackoffMs() / 1000)}s`);
-      setDiag({ error: `Spotify 429: backing off ${Math.ceil(spotifyBackoffMs() / 1000)}s` });
+      if (quotaExceeded) {
+        log(`Spotify quota: ${limitedEndpoint}`); setDiag({ error: `Spotify 429 QUOTA_EXCEEDED on ${limitedEndpoint}` });
+        setNotice("Spotify's daily developer quota is used up, try again later. The RJ can keep you company meanwhile.");
+        return;
+      }
+      if (!spotifyBackoffMs()) { if (boTimer) clearInterval(boTimer); boTimer = null; setNotice((n) => (n?.startsWith("Spotify needs a breather") ? null : n)); return; }
+      log(`Spotify rate limit on ${limitedEndpoint}: backing off ${Math.ceil(spotifyBackoffMs() / 1000)}s`);
+      setDiag({ error: `Spotify 429 on ${limitedEndpoint}: backing off ${Math.ceil(spotifyBackoffMs() / 1000)}s` });
       if (boTimer) clearInterval(boTimer);
       const tick = () => {
         const s = Math.ceil(spotifyBackoffMs() / 1000);
@@ -551,8 +557,20 @@ function LiveInner() {
   }
 
   async function setupSpotify(sid: number): Promise<Out> {
-    let me;
-    try { me = await getMe(); } catch (e) {
+    let me, lastMeErr: unknown;
+    for (let t = 0; ; t++) {
+      try { me = await getMe(); break; } catch (e) {
+        if (quotaExceeded) { setDiag({ account: "quota used up", output: "RJ only (Spotify daily quota used up)", error: `Spotify 429 QUOTA_EXCEEDED on ${limitedEndpoint}` }); return "none"; }
+        if (e instanceof SpotifyError && e.status === 429 && t < 2 && alive(sid)) { await sleep(Math.min(61000, spotifyBackoffMs() + 300)); continue; }
+        if (e instanceof SpotifyError && e.status === 403) {
+          setDiag({ account: "not allowed (403)", output: "RJ only", error: String(e) });
+          setNotice("This Spotify account isn't on the app's allowed users yet. Add it under Users in the Spotify Developer Dashboard (the app is in development mode), then reconnect.");
+          return "none";
+        }
+        me = null; lastMeErr = e; break;
+      }
+    }
+    if (!me) { const e = lastMeErr;
       setDiag({ account: "not connected", output: "RJ only (Spotify not connected)" });
       if (e instanceof SpotifyError && e.status !== 401) setDiag({ error: String(e) });
       return "none";
@@ -675,17 +693,18 @@ function LiveInner() {
     return usedOutro;
   }
 
+  const volSetRef = useRef(false);
   async function playConnect(t: TrackInfo, sid: number) {
     const dev = connectDeviceRef.current!;
     await startOn(dev, t);
-    sp(`/me/player/volume?volume_percent=85&device_id=${dev}`, { method: "PUT" }).catch(() => {});
+    if (!volSetRef.current) { volSetRef.current = true; sp(`/me/player/volume?volume_percent=85&device_id=${dev}`, { method: "PUT" }).catch(() => {}); }
     let skipped = false, started = false;
     skipRef.current = () => { skipped = true; };
     const t0 = Date.now(); let deadline = t0 + (t.durationMs ?? 240000) + 15000;
     let endsAt = t0 + (t.durationMs ?? 240000), first = true;
     while (alive(sid) && !skipped && Date.now() < deadline) {
       // Poll gently: every 10s while visible, 15s while hidden, plus once right at the expected end of the song.
-      const gap = first ? 2500 : Math.min(document.hidden ? 15000 : 10000, Math.max(1200, endsAt - Date.now() - 2000));
+      const gap = first ? 2500 : Math.min(document.hidden ? 60000 : 30000, Math.max(1200, endsAt - Date.now() - 2000));
       first = false;
       for (const until = Date.now() + gap; Date.now() < until && !skipped && alive(sid);) await sleep(250);
       if (skipped || !alive(sid)) break;
@@ -772,7 +791,7 @@ function LiveInner() {
       return null;
     };
     const nextTrack = () => nextFrom(curatorRef.current);
-    const firstP = timed("songs", getToken().then((tk) => tk ? nextFrom(curator) : null));
+    const firstP = timed("songs", getToken().then((tk) => tk ? getMe().catch(async (e) => { if (!(e instanceof SpotifyError && e.status === 429)) throw e; await sleep(Math.min(61000, spotifyBackoffMs() + 400)); return getMe(); }).then(() => nextFrom(curator), () => null) : null));
     let firstDone = false;
     firstP.then((t) => { firstDone = true; if (alive(sid) && phaseRef.current === "tuning") setUpNext(t); });
     sinceTalkRef.current = 0; sinceJokeRef.current = 1; lastNewsRef.current = 0; switchRef.current = null;
@@ -947,7 +966,8 @@ function LiveInner() {
           {now && (outRef.current === "preview" || phase === "waiting") && now.spotifyUrl && <a href={now.spotifyUrl} target="_blank" rel="noreferrer" className="mt-2 text-xs text-[#1DB954]">Open in Spotify ↗</a>}
         </section>
 
-        {notice && <div className="fade-up glass mb-3 rounded-2xl px-4 py-3 text-center text-sm text-zinc-200">{notice}</div>}
+        {notice && <div className="fade-up glass mb-3 rounded-2xl px-4 py-3 text-center text-sm text-zinc-200">{notice}
+          {notice.startsWith("Spotify needs a breather") && <button onClick={() => { clearSpotifyBackoff(); setNotice(null); }} className="ml-2 font-medium text-[#f3efe8] underline underline-offset-2">Try now</button>}</div>}
         {needReconnect && <a href="/api/auth/spotify/login?return=/live" className="mb-3 rounded-2xl bg-[#1DB954] px-4 py-3 text-center text-sm font-medium text-black">Reconnect Spotify to keep playing</a>}
 
         {phase === "tuning" && !upNext && (

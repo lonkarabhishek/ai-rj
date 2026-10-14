@@ -44,9 +44,9 @@ test("external pause (Spotify app / headphones) syncs the UI", async ({ context,
   await live(page, w);
   await page.waitForTimeout(3000);
   w.player.pausedAt = Date.now(); w.player.isPlaying = false; // paused from the Spotify app
-  await expect(page.getByRole("button", { name: "Play", exact: true })).toBeVisible({ timeout: 16000 });
+  await expect(page.getByRole("button", { name: "Play", exact: true })).toBeVisible({ timeout: 35000 }); // polled every 30s to save Spotify quota
   w.player.startedAt += Date.now() - w.player.pausedAt; w.player.isPlaying = true; // resumed from lock screen
-  await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeVisible({ timeout: 16000 });
+  await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeVisible({ timeout: 35000 }); // polled every 30s to save Spotify quota
 });
 
 test("MediaSession lock-screen handlers pause, play and skip", async ({ context, page }, ti) => {

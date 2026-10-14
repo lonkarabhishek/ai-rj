@@ -43,7 +43,43 @@ export class SpotifyError extends Error {
 let blockedUntil = 0;
 let inFlight = 0;
 const waiters: (() => void)[] = [];
-export function spotifyBackoffMs() { return Math.max(0, blockedUntil - Date.now()); }
+let backoffToken = "";
+export let limitedEndpoint = "";
+/** Dev-mode daily quota (429 with reason QUOTA_EXCEEDED, shared by the whole developer account): stop all calls,
+ *  probe /me once every 15 min. In memory only: a reload probes once. */
+export let quotaExceeded = false;
+let quotaProbeAt = 0; // which call Spotify rate-limited (shown in Playback details) // the backoff belongs to one token/account; a new token clears it
+export function spotifyBackoffMs() { return quotaExceeded ? 0 : Math.max(0, blockedUntil - Date.now()); }
+/** "Try now" / account switch: drop the backoff immediately. Never persisted, so a reload also clears it. */
+export function clearSpotifyBackoff() { quotaProbeAt = 0; if (blockedUntil) { blockedUntil = 0; announce(); } }
+let probing: Promise<void> | null = null;
+/** After a (capped) window, one cheap probe (GET /me) decides: success clears the backoff, a 429 starts a new capped window. */
+function scheduleProbe() {
+  const ms = spotifyBackoffMs();
+  setTimeout(() => {
+    if (probing || !blockedUntil || Date.now() < blockedUntil - 50) return;
+    probing = (async () => {
+      const token = await getToken();
+      try {
+        const r = await fetch("https://api.spotify.com/v1/me", { headers: { Authorization: `Bearer ${token}` } });
+        if (r.status === 429) {
+          const b = await r.text();
+          if (/QUOTA_EXCEEDED/.test(b)) { limitedEndpoint = "GET /me (QUOTA_EXCEEDED)"; blockedUntil = 0; quotaExceeded = true; quotaProbeAt = Date.now() + 15 * 60e3; announce(); return; }
+          setBackoff(r.headers.get("Retry-After"), token ?? ""); return;
+        }
+      } catch { /* network: just clear; normal calls handle it */ }
+      clearSpotifyBackoff();
+    })().finally(() => { probing = null; });
+  }, ms + 20);
+}
+function setBackoff(retryAfter: string | null, token: string, fresh = true) {
+  const ra = Number(retryAfter);
+  // Spotify can send Retry-After of hours; never wait more than 60s before probing again.
+  const secs = Math.min(60, Number.isFinite(ra) && ra > 0 ? ra : 5);
+  blockedUntil = Math.max(blockedUntil > Date.now() ? blockedUntil : 0, Date.now() + secs * 1000);
+  backoffToken = token;
+  if (fresh) { announce(); scheduleProbe(); } // one notice + one probe per window, however many calls were in flight
+}
 function announce() {
   try { window.dispatchEvent(new CustomEvent("spotify-backoff", { detail: { until: blockedUntil } })); } catch { /* ssr */ }
 }
@@ -59,6 +95,11 @@ export async function sp<T = unknown>(path: string, init: RequestInit = {}): Pro
   let lastErr: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     // Inside a backoff window: short windows are waited out (no request is made meanwhile), long ones fail fast.
+    if (quotaExceeded) {
+      if (Date.now() < quotaProbeAt || path !== "/me") throw new SpotifyError(429, "QUOTA_EXCEEDED");
+      quotaProbeAt = Date.now() + 15 * 60e3;
+    }
+    if (Date.now() < blockedUntil && cached?.token && backoffToken && cached.token !== backoffToken) clearSpotifyBackoff(); // switched account / new token
     if (Date.now() < blockedUntil) {
       if (spotifyBackoffMs() > 10000) throw new SpotifyError(429, `backing off ${Math.ceil(spotifyBackoffMs() / 1000)}s`);
       await wait(spotifyBackoffMs() + Math.random() * 300);
@@ -75,14 +116,24 @@ export async function sp<T = unknown>(path: string, init: RequestInit = {}): Pro
     } catch (e) { release(); lastErr = e; await wait(1000 * 2 ** attempt); continue; }
     release();
     if (r.status === 204 || r.status === 202) return undefined as T;
-    if (r.ok) { const text = await r.text(); return (text ? JSON.parse(text) : undefined) as T; }
+    if (r.ok) { if (quotaExceeded) { quotaExceeded = false; announce(); } if (blockedUntil) clearSpotifyBackoff(); const text = await r.text(); return (text ? JSON.parse(text) : undefined) as T; }
     const body = (await r.text()).slice(0, 200);
     lastErr = new SpotifyError(r.status, body);
     if (r.status === 401) continue; // refresh token and retry
+    if (r.status === 429 && /QUOTA_EXCEEDED/.test(body)) {
+      limitedEndpoint = `${init.method ?? "GET"} ${path.split("?")[0]} (QUOTA_EXCEEDED)`;
+      if (!quotaExceeded) { quotaExceeded = true; quotaProbeAt = Date.now() + 15 * 60e3; announce(); }
+      throw new SpotifyError(429, "QUOTA_EXCEEDED");
+    }
+    if (r.status === 429 && /QUOTA_EXCEEDED/.test(body)) {
+      limitedEndpoint = `${init.method ?? "GET"} ${path.split("?")[0]} (QUOTA_EXCEEDED)`;
+      if (!quotaExceeded) { quotaExceeded = true; blockedUntil = 0; quotaProbeAt = Date.now() + 15 * 60e3; announce(); }
+      throw new SpotifyError(429, "QUOTA_EXCEEDED");
+    }
     if (r.status === 429) {
-      const ra = Number(r.headers.get("Retry-After"));
-      blockedUntil = Math.max(blockedUntil, Date.now() + (Number.isFinite(ra) && ra > 0 ? ra : 5) * 1000);
-      announce();
+      limitedEndpoint = `${init.method ?? "GET"} ${path.split("?")[0]}${r.headers.get("Retry-After") ? ` (Retry-After ${r.headers.get("Retry-After")}s)` : " (no Retry-After)"}`;
+      const was = blockedUntil > Date.now();
+      setBackoff(r.headers.get("Retry-After"), token, !was);
       if (attempt === 0 && spotifyBackoffMs() <= 10000) continue; // short Retry-After: wait it out once, then retry
       throw lastErr;
     }
@@ -114,8 +165,14 @@ function toTrack(t: any): TrackInfo | null {
   };
 }
 
-export async function getMe() {
-  return sp<{ display_name: string; product: string; id: string }>("/me");
+type Me = { display_name: string; product: string; id: string };
+let meP: Promise<Me> | null = null, meAt = 0;
+/** Single-flight, cached profile: every caller shares one /me request (no parallel retries). */
+export function getMe(): Promise<Me> {
+  if (meP && Date.now() - meAt < 5 * 60e3) return meP;
+  meAt = Date.now();
+  meP = sp<Me>("/me").catch((e) => { meP = null; throw e; });
+  return meP;
 }
 export async function getPlaylists() {
   const j = await sp<any>("/me/playlists?limit=50");
@@ -257,7 +314,7 @@ export class Curator {
     // One 10-result page (Spotify's cap), offsets on a coarse grid so the cache hits; results cached for 6h.
     const off = maxOffset ? 10 * Math.floor(Math.random() * Math.min(3, maxOffset / 10 + 1)) : 0;
     const key = `myrj.sq.${q}|${off}`;
-    try { const c = JSON.parse(localStorage.getItem(key) ?? "null"); if (c && Date.now() - c.at < 6 * 3600e3) return c.items; } catch { /* ignore */ }
+    try { const c = JSON.parse(localStorage.getItem(key) ?? "null"); if (c && Date.now() - c.at < 24 * 3600e3) return c.items; } catch { /* ignore */ }
     if ((disc ? this.discBudget : this.searchBudget) <= 0 || spotifyBackoffMs() > 10000) return [];
     if (disc) this.discBudget--; else this.searchBudget--;
     try {
@@ -300,6 +357,18 @@ export class Curator {
   }
 
   private async loadBase() {
+    // Taste (favourites, liked songs, playlists, top artists) is cached for a day per account: ~0 calls on later sessions.
+    const uid = await getMe().then((m) => m.id).catch(() => "");
+    const key = `myrj.taste.${uid}`;
+    try {
+      const c = uid && JSON.parse(localStorage.getItem(key) ?? "null");
+      if (c && Date.now() - c.at < 24 * 3600e3 && c.pools?.top?.length) { this.pools = { ...c.pools, seeds: this.seeds }; this.artists = c.artists ?? []; return; }
+    } catch { /* ignore */ }
+    await this.loadBaseLive();
+    const save = () => { try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), pools: { top: this.pools.top, saved: this.pools.saved, playlists: this.pools.playlists }, artists: this.artists })); } catch { /* full */ } };
+    save(); setTimeout(save, 15000); // again once playlists and long-term favourites have arrived
+  }
+  private async loadBaseLive() {
     // Playlists are slow (one request each): load them in the background so the first songs come fast.
     const plsP = this.safe(async () => {
       const lists = (await getPlaylists()).slice(0, 4);
@@ -332,7 +401,7 @@ export class Curator {
     if (!this.artists.length) return viaSeeds;
     const shuffled = [...this.artists].sort(() => Math.random() - 0.5).slice(0, 2);
     const results = await Promise.all(shuffled.map(async (a) => {
-      const viaTop = await this.safe(async () => this.map((await sp<any>(`/artists/${a.id}/top-tracks?market=from_token`)).tracks ?? []));
+      const viaTop: TrackInfo[] = []; // artist top-tracks is closed to dev-mode apps (403): don't spend calls on it
       const genre = a.genres[Math.floor(Math.random() * a.genres.length)];
       const q = genre ? `genre:"${genre}"` : a.name;
       const viaSearch = this.map(await this.search(q, 10, 20, true));
