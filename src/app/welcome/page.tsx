@@ -45,7 +45,7 @@ function Flow() {
 
       <div key={step} className="fade-up flex flex-1 flex-col">
         <div className={cx(step === "welcome" ? "mt-[8svh] sm:mt-[18vh]" : "mt-6", "mb-8")}>
-          {step === "welcome" && <div className="breathe mb-8 h-16 w-16 rounded-2xl bg-gradient-to-br from-fuchsia-500 to-violet-600 shadow-[0_10px_40px_-10px] shadow-fuchsia-500/60" />}
+          {step === "welcome" && <div className="breathe mb-8 h-16 w-16 orb-tile rounded-2xl" />}
           <h1 className="whitespace-pre-line text-[28px] font-semibold sm:text-[32px] leading-[1.1] tracking-tight">{COPY[step].title}</h1>
           <p className="mt-3 text-[15px] leading-relaxed text-zinc-400">{COPY[step].sub}</p>
         </div>

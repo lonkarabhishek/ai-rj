@@ -12,8 +12,8 @@ export default function Settings() {
       </header>
       <h1 className="mb-8 text-3xl sm:mb-10 sm:text-4xl font-semibold tracking-tight">Settings</h1>
       {loaded && <div className="fade-up"><AllPrefs p={p} up={up} returnTo="/settings" /></div>}
-      <div className="fixed inset-x-0 bottom-0 bg-gradient-to-t from-[#060607] via-[#060607]/90 to-transparent px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-10 sm:px-6">
-        <Link href="/live" className="mx-auto flex h-14 max-w-xl items-center justify-center rounded-full bg-white text-[15px] font-medium text-black active:scale-[0.98]">Go Live</Link>
+      <div className="fixed inset-x-0 bottom-0 bg-gradient-to-t from-[#0a0908] via-[#0a0908]/90 to-transparent px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-10 sm:px-6">
+        <Link href="/live" className="mx-auto flex h-14 max-w-xl items-center justify-center rounded-full bg-[#f3efe8] text-[15px] font-medium text-[#141210] active:scale-[0.98]">Go Live</Link>
       </div>
     </main>
   );

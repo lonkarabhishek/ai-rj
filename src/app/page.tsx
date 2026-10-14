@@ -8,7 +8,7 @@ export default function Home() {
   useEffect(() => { router.replace(isOnboarded(loadPrefs()) ? "/live" : "/welcome"); }, [router]);
   return (
     <main className="ambient flex min-h-dvh items-center justify-center">
-      <div className="breathe h-14 w-14 rounded-2xl bg-gradient-to-br from-fuchsia-500 to-violet-600" />
+      <div className="breathe h-14 w-14 rounded-2xl orb-tile" />
     </main>
   );
 }

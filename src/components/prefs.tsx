@@ -67,7 +67,7 @@ export function HumorPicker({ p, up }: { p: Prefs; up: Up }) {
   const i = HUMORS.indexOf(p.humor);
   return (
     <div className="space-y-3">
-      <input type="range" min={0} max={HUMORS.length - 1} value={i} onChange={(e) => up("humor", HUMORS[Number(e.target.value)])} className="w-full accent-fuchsia-400" />
+      <input type="range" min={0} max={HUMORS.length - 1} value={i} onChange={(e) => up("humor", HUMORS[Number(e.target.value)])} className="w-full accent-[#e8b06a]" />
       <div className="flex justify-between text-xs text-zinc-500">{HUMORS.map((h) => <span key={h} className={cx("capitalize", h === p.humor && "text-white font-medium")}>{h}</span>)}</div>
     </div>
   );
@@ -176,7 +176,7 @@ export function VoicePicker({ p, up, compact }: { p: Prefs; up: Up; compact?: bo
           </div>
         ))}
       </div>
-      <button onClick={hearAsRj} disabled={rjBusy || !p.voiceId} className="flex items-center gap-2 text-sm text-fuchsia-300 hover:text-fuchsia-200 disabled:opacity-50">
+      <button onClick={hearAsRj} disabled={rjBusy || !p.voiceId} className="flex items-center gap-2 text-sm text-[#f0c38e] hover:text-[#f7d9b4] disabled:opacity-50">
         {rjBusy ? <Spinner /> : "▶"} Hear it as your RJ, in {LANGUAGES.find((l) => l.id === p.language)?.label}
       </button>
     </div>

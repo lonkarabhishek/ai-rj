@@ -621,7 +621,7 @@ function LiveInner() {
         {/* top bar */}
         <header className="flex h-10 items-center justify-between">
           <Link href="/settings" className="flex items-center gap-2 text-[15px] font-semibold tracking-tight">
-            <span className="h-2.5 w-2.5 rounded-full bg-gradient-to-br from-fuchsia-400 to-violet-500" />MyRJ
+            <span className={cx("onair-dot h-2 w-2 rounded-full", live && "is-live")} />MyRJ
           </Link>
           <div className="flex items-center gap-3">
             {live && <span className="flex items-center gap-1.5 rounded-full bg-red-500/15 px-2.5 py-1 text-[11px] font-semibold tracking-wider text-red-300"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" />LIVE</span>}
@@ -639,16 +639,16 @@ function LiveInner() {
           <div className="relative">
             <div className={cx("aspect-square w-[min(64vw,280px,30svh)] overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)] transition-transform duration-700", speaking || phase === "rj" ? "scale-[0.72]" : phase === "song" ? "scale-100" : "scale-[0.94]")}>
               {art ? <img key={art} src={art} alt="" className="fade-up h-full w-full object-cover" /> : (
-                <div className="relative flex h-full w-full items-center justify-center bg-gradient-to-br from-fuchsia-500/90 via-violet-600/90 to-indigo-700/90">
-                  <div className={cx("h-24 w-24 rounded-full bg-white/15 backdrop-blur", live ? "breathe" : "")} />
-                  <span className="absolute text-4xl">{phase === "rj" ? "🎙️" : phase === "tuning" || phase === "recovering" ? "" : "📻"}</span>
+                <div className="stage-card relative flex h-full w-full items-center justify-center">
+                  <div className={cx("onair-orb", live && "is-live", phase === "rj" && "is-talking")} />
+                  <span className="absolute bottom-4 text-[10px] font-medium uppercase tracking-[0.28em] text-[#f3efe8]/45">{phase === "rj" ? "On air" : live ? "Live" : "MyRJ FM"}</span>
                   {(phase === "tuning" || phase === "recovering") && <Spinner className="absolute h-6 w-6" />}
                 </div>
               )}
             </div>
             {(phase === "rj" || speaking) && (
               <div className="glass absolute -bottom-4 left-1/2 flex -translate-x-1/2 items-end gap-[3px] rounded-full px-3.5 py-2">
-                {[0, 1, 2, 3, 4].map((b) => <span key={b} className="w-[3px] origin-bottom animate-[eq_0.9s_ease-in-out_infinite] rounded-full bg-fuchsia-300" style={{ animationDelay: `${b * 0.12}s`, height: 12 }} />)}
+                {[0, 1, 2, 3, 4].map((b) => <span key={b} className="w-[3px] origin-bottom animate-[eq_0.9s_ease-in-out_infinite] rounded-full bg-[#f5c48a]" style={{ animationDelay: `${b * 0.12}s`, height: 12 }} />)}
                 <span className="ml-2 text-[11px] font-medium">{rjName}</span>
               </div>
             )}
@@ -692,13 +692,13 @@ function LiveInner() {
 
         <div className="flex items-center gap-3">
           {!live ? (
-            <button onClick={goLive} className="h-14 w-full rounded-full bg-white text-[17px] sm:h-16 font-semibold text-black shadow-[0_10px_40px_-10px_rgba(255,255,255,0.35)] transition active:scale-[0.97]">Go Live</button>
+            <button onClick={goLive} className="h-14 w-full rounded-full bg-[#f3efe8] text-[17px] sm:h-16 font-semibold text-black shadow-[0_12px_44px_-12px_rgba(240,180,110,0.45)] transition active:scale-[0.97]">Go Live</button>
           ) : (
             <>
               <button onClick={() => stop("Off air. Tap Go Live to tune back in.")} className="glass flex h-14 w-14 shrink-0 items-center sm:h-16 sm:w-16 justify-center rounded-full active:scale-95" aria-label="Stop">
                 <span className="h-4 w-4 rounded-[3px] bg-white" />
               </button>
-              <button onClick={() => skipRef.current()} disabled={phase === "tuning" || phase === "recovering"} className="h-14 flex-1 rounded-full bg-white text-[16px] sm:h-16 font-semibold text-black transition active:scale-[0.97] disabled:opacity-40">Next</button>
+              <button onClick={() => skipRef.current()} disabled={phase === "tuning" || phase === "recovering"} className="h-14 flex-1 rounded-full bg-[#f3efe8] text-[16px] sm:h-16 font-semibold text-black transition active:scale-[0.97] disabled:opacity-40">Next</button>
             </>
           )}
         </div>

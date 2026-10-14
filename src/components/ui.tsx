@@ -9,8 +9,8 @@ export function Button({ variant = "primary", className, ...props }: ButtonHTMLA
       {...props}
       className={cx(
         "inline-flex items-center justify-center gap-2 rounded-full px-6 h-12 text-[15px] font-medium transition active:scale-[0.97] disabled:opacity-40 disabled:pointer-events-none",
-        variant === "primary" && "bg-white text-black hover:bg-zinc-200",
-        variant === "light" && "bg-gradient-to-r from-fuchsia-500 to-violet-500 text-white shadow-[0_8px_30px_-8px] shadow-fuchsia-500/50 hover:brightness-110",
+        variant === "primary" && "bg-[#f3efe8] text-[#141210] hover:bg-white",
+        variant === "light" && "bg-[#f3efe8] text-[#141210] shadow-[0_10px_40px_-12px_rgba(240,180,110,0.55)] hover:bg-white",
         variant === "ghost" && "text-zinc-300 hover:text-white hover:bg-white/5",
         className,
       )}

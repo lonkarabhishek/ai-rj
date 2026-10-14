@@ -18,7 +18,7 @@ export const metadata: Metadata = {
   description: "Your own AI Radio Jockey. Speaks your language, plays your music, shares your news.",
 };
 
-export const viewport: Viewport = { width: "device-width", initialScale: 1, viewportFit: "cover", themeColor: "#060607" };
+export const viewport: Viewport = { width: "device-width", initialScale: 1, viewportFit: "cover", themeColor: "#0a0908" };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
