@@ -39,25 +39,48 @@ export class SpotifyError extends Error {
   constructor(public status: number, msg: string) { super(`Spotify ${status}: ${msg}`); }
 }
 
-/** Spotify Web API call with token refresh on 401, Retry-After on 429, and backoff on network/5xx errors. */
+// ---- shared rate limiter: one backoff window for the whole app, honouring Retry-After; max 3 calls in flight ----
+let blockedUntil = 0;
+let inFlight = 0;
+const waiters: (() => void)[] = [];
+export function spotifyBackoffMs() { return Math.max(0, blockedUntil - Date.now()); }
+function announce() {
+  try { window.dispatchEvent(new CustomEvent("spotify-backoff", { detail: { until: blockedUntil } })); } catch { /* ssr */ }
+}
+async function slot() {
+  if (inFlight < 3) { inFlight++; return; }
+  await new Promise<void>((r) => waiters.push(r)); inFlight++;
+}
+function release() { inFlight--; waiters.shift()?.(); }
+
+/** Spotify Web API call: token refresh on 401, backoff on network/5xx. A 429 opens a global backoff window (Retry-After)
+ *  and is never retried; every call during the window fails fast without touching Spotify. */
 export async function sp<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
   let lastErr: unknown;
-  for (let attempt = 0; attempt < 4; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (Date.now() < blockedUntil) throw new SpotifyError(429, `backing off ${Math.ceil(spotifyBackoffMs() / 1000)}s`);
     const token = await getToken(attempt > 0 && lastErr instanceof SpotifyError && lastErr.status === 401);
     if (!token) throw new SpotifyError(401, "not connected");
     let r: Response;
+    await slot();
     try {
       r = await fetch(`https://api.spotify.com/v1${path}`, {
         ...init,
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(init.headers ?? {}) },
       });
-    } catch (e) { lastErr = e; await wait(1000 * 2 ** attempt); continue; }
+    } catch (e) { release(); lastErr = e; await wait(1000 * 2 ** attempt); continue; }
+    release();
     if (r.status === 204 || r.status === 202) return undefined as T;
     if (r.ok) { const text = await r.text(); return (text ? JSON.parse(text) : undefined) as T; }
     const body = (await r.text()).slice(0, 200);
     lastErr = new SpotifyError(r.status, body);
     if (r.status === 401) continue; // refresh token and retry
-    if (r.status === 429) { await wait(Math.min(30, Number(r.headers.get("Retry-After") ?? 2)) * 1000); continue; }
+    if (r.status === 429) {
+      const ra = Number(r.headers.get("Retry-After"));
+      blockedUntil = Math.max(blockedUntil, Date.now() + (Number.isFinite(ra) && ra > 0 ? ra : 5) * 1000);
+      announce();
+      throw lastErr;
+    }
     if (r.status >= 500) { await wait(1000 * 2 ** attempt); continue; }
     throw lastErr; // 400/403/404: caller decides
   }
@@ -65,6 +88,13 @@ export async function sp<T = unknown>(path: string, init: RequestInit = {}): Pro
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+function slim(t: any) {
+  return t && { type: t.type, id: t.id, uri: t.uri, name: t.name, duration_ms: t.duration_ms, preview_url: t.preview_url, external_urls: t.external_urls,
+    album: { name: t.album?.name, images: (t.album?.images ?? []).slice(0, 1) }, artists: (t.artists ?? []).map((a: any) => ({ id: a.id, name: a.name })) };
+}
+function pruneSearchCache() {
+  try { Object.keys(localStorage).filter((k) => k.startsWith("myrj.sq.")).forEach((k) => localStorage.removeItem(k)); } catch { /* ignore */ }
+}
 function toTrack(t: any): TrackInfo | null {
   if (!t || t.type !== "track") return null;
   return {
@@ -212,14 +242,19 @@ export class Curator {
     try { return await fn(); } catch { return []; }
   }
   private map(items: any[]) { return items.map(toTrack).filter(Boolean) as TrackInfo[]; }
-  private async search(q: string, limit = 20, maxOffset = 60): Promise<any[]> {
-    // Spotify now caps search at limit=10 for most apps (larger limits are rejected): page in chunks of 10.
-    const off = maxOffset ? Math.floor(Math.random() * maxOffset) : 0;
-    const pages = await Promise.all(Array.from({ length: Math.ceil(limit / 10) }, (_, i) =>
-      sp<any>(`/search?type=track&limit=10&offset=${off + i * 10}&q=${encodeURIComponent(q)}`).then((j) => j.tracks?.items ?? []).catch(() => [])));
-    let items = pages.flat();
-    if (!items.length && off) items = await sp<any>(`/search?type=track&limit=10&q=${encodeURIComponent(q)}`).then((j) => j.tracks?.items ?? []).catch(() => []);
-    return items;
+  private searchBudget = 6; // searches per queue build
+  private async search(q: string, _limit = 10, maxOffset = 60): Promise<any[]> {
+    // One 10-result page (Spotify's cap), offsets on a coarse grid so the cache hits; results cached for 6h.
+    const off = maxOffset ? 10 * Math.floor(Math.random() * Math.min(3, maxOffset / 10 + 1)) : 0;
+    const key = `myrj.sq.${q}|${off}`;
+    try { const c = JSON.parse(localStorage.getItem(key) ?? "null"); if (c && Date.now() - c.at < 6 * 3600e3) return c.items; } catch { /* ignore */ }
+    if (this.searchBudget <= 0 || spotifyBackoffMs() > 0) return [];
+    this.searchBudget--;
+    try {
+      const items = (await sp<any>(`/search?type=track&limit=10&offset=${off}&q=${encodeURIComponent(q)}`)).tracks?.items ?? [];
+      try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), items: items.map(slim) })); } catch { pruneSearchCache(); }
+      return items;
+    } catch { return []; }
   }
 
   /** Strict instrumental filter for Focus: audio-features if Spotify allows it, else text + artist-genre signals. Unsure = out. */
@@ -257,7 +292,7 @@ export class Curator {
   private async loadBase() {
     // Playlists are slow (one request each): load them in the background so the first songs come fast.
     const plsP = this.safe(async () => {
-      const lists = (await getPlaylists()).slice(0, 8);
+      const lists = (await getPlaylists()).slice(0, 4);
       const all = await Promise.all(lists.map((pl: { id: string }) => getTracks(pl.id).catch(() => [])));
       return all.flat();
     });
@@ -267,7 +302,7 @@ export class Curator {
       this.safe(async () => this.map((await sp<any>("/me/top/tracks?limit=50&time_range=medium_term")).items ?? [])),
       this.safe(async () => this.map((await sp<any>("/me/top/tracks?limit=50&time_range=long_term")).items ?? [])),
       this.safe(async () => {
-        const offs = [0, 50, 100, 150];
+        const offs = [0, 50];
         const pages = await Promise.all(offs.map((o) => sp<any>(`/me/tracks?limit=50&offset=${o}`).catch(() => ({ items: [] }))));
         return this.map(pages.flatMap((p) => (p.items ?? []).map((i: any) => i.track)));
       }),
@@ -282,14 +317,14 @@ export class Curator {
     // imported taste seeds guide discovery too: search their artists
     const seedArtists = [...new Set(this.seeds.map((t) => t.artists.split(",")[0].trim()))].sort(() => Math.random() - 0.5).slice(0, 2);
     const viaSeeds = (await Promise.all(seedArtists.map((a) => this.safe(async () =>
-      this.map((await sp<any>(`/search?type=track&limit=10&q=${encodeURIComponent(`artist:${a}`)}`)).tracks?.items ?? []))))).flat();
+      this.map(await this.search(`artist:${a}`, 10, 0)))))).flat();
     if (!this.artists.length) return viaSeeds;
-    const shuffled = [...this.artists].sort(() => Math.random() - 0.5).slice(0, 3);
+    const shuffled = [...this.artists].sort(() => Math.random() - 0.5).slice(0, 2);
     const results = await Promise.all(shuffled.map(async (a) => {
       const viaTop = await this.safe(async () => this.map((await sp<any>(`/artists/${a.id}/top-tracks?market=from_token`)).tracks ?? []));
       const genre = a.genres[Math.floor(Math.random() * a.genres.length)];
       const q = genre ? `genre:"${genre}"` : a.name;
-      const viaSearch = await this.safe(async () => this.map((await sp<any>(`/search?type=track&limit=10&offset=${Math.floor(Math.random() * 100)}&q=${encodeURIComponent(q)}`)).tracks?.items ?? []));
+      const viaSearch = this.map(await this.search(q, 10, 20));
       return [...viaTop.slice(0, 4), ...viaSearch];
     }));
     return [...viaSeeds, ...results.flat()];
@@ -317,6 +352,7 @@ export class Curator {
   }
 
   private async refill() {
+    this.searchBudget = 6;
     if (this.mode === "focus") {
       // Focus: instrumental only. Never fall back to vocal favourites. With song languages: instrumental takes on them.
       const modeT = this.langs.length ? await this.langTracks() : await this.modeTracks();
@@ -365,7 +401,7 @@ export class Curator {
   }
 
   async next(): Promise<TrackInfo | null> {
-    for (let tries = 0; this.queue.length < 3 && tries < 3; tries++) {
+    for (let tries = 0; this.queue.length < 3 && tries < 2 && !spotifyBackoffMs(); tries++) {
       try { await this.refill(); } catch { await new Promise((r) => setTimeout(r, 1500)); }
     }
     if (!this.queue.length) {

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { isOnboarded, loadPrefs, MODES, type ListenMode, type Prefs, type TrackInfo } from "@/lib/prefs";
-import { Curator, getMe, getToken, getTokenInfo, sp, SpotifyError } from "@/lib/spotifyClient";
+import { Curator, getMe, getToken, getTokenInfo, sp, spotifyBackoffMs, SpotifyError } from "@/lib/spotifyClient";
 import { AllPrefs, SongLangPicker, TalkToggles, usePrefs } from "@/components/prefs";
 import { cx, Spinner } from "@/components/ui";
 import { Lyrics } from "@/components/Lyrics";
@@ -147,6 +147,20 @@ function LiveInner() {
       }
     };
     const onOffline = () => setNotice("You're offline. MyRJ will pick up where it left off.");
+    let boTimer: ReturnType<typeof setInterval> | null = null;
+    const onBackoff = () => {
+      log(`Spotify rate limit: backing off ${Math.ceil(spotifyBackoffMs() / 1000)}s`);
+      setDiag({ error: `Spotify 429: backing off ${Math.ceil(spotifyBackoffMs() / 1000)}s` });
+      if (boTimer) clearInterval(boTimer);
+      const tick = () => {
+        const s = Math.ceil(spotifyBackoffMs() / 1000);
+        if (s <= 0) { clearInterval(boTimer!); boTimer = null; setNotice((n) => (n?.startsWith("Spotify needs a breather") ? null : n)); return; }
+        const t = s > 90 ? `${Math.ceil(s / 60)} min` : `${s}s`;
+        setNotice(`Spotify needs a breather, resuming in ${t}.${phaseRef.current === "song" ? " Your song keeps playing." : ""}`);
+      };
+      tick(); boTimer = setInterval(tick, 1000);
+    };
+    window.addEventListener("spotify-backoff", onBackoff);
     const onOnline = () => { setNotice(null); log("back online"); };
     const onVis = () => { if (document.visibilityState === "visible" && phaseRef.current !== "idle") { requestWake(); if (ctxRef.current && ctxRef.current.state !== "running") ctxRef.current.resume().catch(() => {}); } };
     const onTap = () => unlockAudio(); // every tap re-unlocks (covers autostart after onboarding, and blocked clips)
@@ -155,6 +169,7 @@ function LiveInner() {
     document.addEventListener("visibilitychange", onVis);
     return () => {
       sessionRef.current++; playerRef.current?.disconnect(); audioRef.current?.pause(); chan?.close();
+      window.removeEventListener("spotify-backoff", onBackoff); if (boTimer) clearInterval(boTimer);
       window.removeEventListener("offline", onOffline); window.removeEventListener("online", onOnline);
       document.removeEventListener("visibilitychange", onVis);
       window.removeEventListener("pointerdown", onTap); window.removeEventListener("touchend", onTap);
@@ -667,14 +682,23 @@ function LiveInner() {
     let skipped = false, started = false;
     skipRef.current = () => { skipped = true; };
     const t0 = Date.now(); let deadline = t0 + (t.durationMs ?? 240000) + 15000;
+    let endsAt = t0 + (t.durationMs ?? 240000), first = true;
     while (alive(sid) && !skipped && Date.now() < deadline) {
-      await sleep(1500);
+      // Poll gently: every 10s while visible, 15s while hidden, plus once right at the expected end of the song.
+      const gap = first ? 2500 : Math.min(document.hidden ? 15000 : 10000, Math.max(1200, endsAt - Date.now() - 2000));
+      first = false;
+      for (const until = Date.now() + gap; Date.now() < until && !skipped && alive(sid);) await sleep(250);
+      if (skipped || !alive(sid)) break;
+      const bo = spotifyBackoffMs();
+      if (bo) { deadline += bo + 1000; endsAt = Math.max(endsAt, Date.now()); continue; } // rate-limited: the song keeps playing on the device
       const st = await sp<any>("/me/player").catch(() => null);
-      if (pausedRef.current) { deadline += 1500; if (st?.is_playing && st.item?.uri === t.uri && appliedPauseRef.current) syncExternal(true); continue; }
+      if (pausedRef.current) { deadline += gap; endsAt += gap; if (st?.is_playing && st.item?.uri === t.uri && appliedPauseRef.current) syncExternal(true); continue; }
       if (started && st?.item?.uri === t.uri && !st.is_playing && st.progress_ms > 0 && st.item.duration_ms - st.progress_ms > 3000) { syncExternal(false); continue; }
-      if (!st?.item) { if (!started && Date.now() - t0 > 15000) throw new Error("song never started on device"); continue; }
+      if (!st?.item) { if (!started && Date.now() - t0 > 15000 && !spotifyBackoffMs()) throw new Error("song never started on device"); continue; }
       if (st.item.uri !== t.uri) { if (started) break; continue; }
       if (st.is_playing) started = true;
+      endsAt = Date.now() + (st.item.duration_ms - st.progress_ms);
+      deadline = Math.max(deadline, endsAt + 15000);
       setProgress(st.progress_ms / st.item.duration_ms);
       if (st.item.duration_ms - st.progress_ms < 2500) break;
       if (started && !st.is_playing && st.progress_ms === 0) break;
@@ -705,6 +729,7 @@ function LiveInner() {
       return true;
     } catch (e) {
       const msg = String(e);
+      if (spotifyBackoffMs() > 0) { log(`rate-limited: waiting ${Math.ceil(spotifyBackoffMs() / 1000)}s`); await sleep(spotifyBackoffMs() + 500); return true; } // not a failure: just wait it out
       setDiag({ error: msg }); log(`playback failed: ${msg}`);
       if (/401/.test(msg)) setNeedReconnect(true);
       const elapsed = Date.now() - t0;
@@ -740,7 +765,7 @@ function LiveInner() {
     const curator = new Curator(modeRef.current, loadPrefs().tasteSeeds ?? [], loadPrefs().songLangs);
     const nextFrom = async (c: Curator | null): Promise<TrackInfo | null> => {
       if (!c) return null;
-      for (let i = 0; i < 3; i++) { const t = await c.next().catch(() => null); if (t) return t; await sleep(1500); }
+      for (let i = 0; i < 3; i++) { const t = await c.next().catch(() => null); if (t) return t; await sleep(Math.max(1500, spotifyBackoffMs() + 500)); }
       return null;
     };
     const nextTrack = () => nextFrom(curatorRef.current);
