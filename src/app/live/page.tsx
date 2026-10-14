@@ -13,7 +13,9 @@ declare global { interface Window { Spotify: any; onSpotifyWebPlaybackSDKReady: 
 type Out = "sdk" | "connect" | "preview" | "none";
 type Phase = "idle" | "tuning" | "rj" | "song" | "waiting" | "recovering";
 interface Diag { account?: string; product?: string; scopes?: string; sdk?: string; device?: string; output?: string; error?: string; log?: string[] }
-interface Segment { script: string; audioUrl: string | null; lang: string }
+type BreakKind = "none" | "stinger" | "full" | "switch";
+interface Plan { kind: BreakKind; withNews?: boolean; withJoke?: boolean }
+interface Segment { script: string; audioUrl: string | null; lang: string; kind: BreakKind }
 
 const NEEDED = ["streaming", "user-modify-playback-state", "user-read-playback-state"];
 const SONG_VOL = 0.85;
@@ -48,6 +50,7 @@ function LiveInner() {
   const [showDiag, setShowDiag] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [needReconnect, setNeedReconnect] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
 
   const sessionRef = useRef(0);
   const skipRef = useRef<() => void>(() => {});
@@ -62,6 +65,10 @@ function LiveInner() {
   const curatorRef = useRef<Curator | null>(null);
   const recentRef = useRef<string[]>([]);
   const ttsQuotaRef = useRef(false);
+  const lastNewsRef = useRef(0);
+  const sinceTalkRef = useRef(0);
+  const sinceJokeRef = useRef(0);
+  const switchRef = useRef<ListenMode | null>(null);
   const diagRef = useRef<Diag>({ log: [] });
   const wakeRef = useRef<any>(null);
   const chanRef = useRef<BroadcastChannel | null>(null);
@@ -137,12 +144,38 @@ function LiveInner() {
   }
 
   function changeMode(m: ListenMode) {
+    if (m === modeRef.current) return;
     setListenMode(m); modeRef.current = m;
-    if (phase !== "idle" && outRef.current !== "none") {
-      curatorRef.current = new Curator(m);
-      setNotice(`${MODES.find((x) => x.id === m)!.label} from the next song.`);
-      setTimeout(() => setNotice(null), 3500);
+    if (phaseRef.current !== "idle") {
+      if (outRef.current !== "none") curatorRef.current = new Curator(m, loadPrefs().tasteSeeds ?? []);
+      switchRef.current = m;
+      setNotice(`Switching to ${MODES.find((x) => x.id === m)!.label}…`);
+      setTimeout(() => setNotice(null), 3000);
+      if (phaseRef.current === "song" || phaseRef.current === "waiting") skipRef.current(); // fade out now, RJ announces the switch
     }
+  }
+
+  /** FM-style pacing: mostly music, randomized, mode-aware. */
+  function planBreak(i: number): Plan {
+    if (i === 0) return { kind: "full", withNews: true, withJoke: true };
+    const m = modeRef.current, since = ++sinceTalkRef.current;
+    const r = Math.random();
+    const cfg = {
+      default: { none: 0.45, stinger: 0.3, maxGap: 3 },
+      drive: { none: 0.4, stinger: 0.3, maxGap: 3 },
+      gym: { none: 0.5, stinger: 0.5, maxGap: 3 },
+      focus: { none: 0.8, stinger: 0.2, maxGap: 6 },
+    }[m];
+    let kind: BreakKind = r < cfg.none ? "none" : r < cfg.none + cfg.stinger ? "stinger" : "full";
+    if (kind === "none" && since >= cfg.maxGap) kind = m === "gym" || m === "focus" ? "stinger" : "full";
+    if ((m === "gym" || m === "focus") && kind === "full") kind = "stinger";
+    if (kind === "none") return { kind };
+    sinceTalkRef.current = 0;
+    const newsDue = Date.now() - lastNewsRef.current > 22 * 60 * 1000;
+    const withNews = kind === "full" && newsDue && (m === "default" || m === "drive");
+    const withJoke = kind === "full" && ++sinceJokeRef.current >= 2 && Math.random() < 0.6;
+    if (withJoke) sinceJokeRef.current = 0;
+    return { kind, withNews, withJoke };
   }
 
   // ---------- audio ----------
@@ -157,17 +190,63 @@ function LiveInner() {
     const from = (await pl.getVolume().catch(() => SONG_VOL)) as number, steps = 10;
     for (let i = 1; i <= steps; i++) { await pl.setVolume(Math.max(0.0001, from + (to - from) * (i / steps))).catch(() => {}); await sleep(ms / steps); }
   }
-  function playClip(url: string, opts: { maxMs?: number; fadeIn?: boolean } = {}) {
+  function playClip(url: string, opts: { maxMs?: number; fadeIn?: boolean; bindSkip?: boolean } = {}) {
     return new Promise<void>((resolve) => {
       const a = new Audio(url); audioRef.current = a; a.volume = opts.fadeIn ? 0 : 1;
       let done = false;
       const finish = async (fade = false) => { if (done) return; done = true; if (fade) await fadeEl(a, 0, 900); a.pause(); resolve(); };
       a.onended = () => finish(); a.onerror = () => finish();
-      a.ontimeupdate = () => { if (a.duration) setProgress(a.currentTime / a.duration); };
-      skipRef.current = () => finish(true);
+      if (opts.bindSkip !== false) a.ontimeupdate = () => { if (a.duration) setProgress(a.currentTime / a.duration); };
+      if (opts.bindSkip !== false) skipRef.current = () => finish(true);
       setTimeout(() => finish(true), opts.maxMs ?? 120000); // safety: never hang on a clip
       a.play().then(() => { if (opts.fadeIn) fadeEl(a, 1, 1500); }).catch((e) => { log(`audio blocked: ${e?.name ?? e}`); setNotice("Tap anywhere to allow audio."); finish(); });
     });
+  }
+
+  // ---------- station sound: Web Audio jingles + soft music bed ----------
+  const ctxRef = useRef<AudioContext | null>(null);
+  const bedRef = useRef<{ stop: () => void } | null>(null);
+  function ac() {
+    if (!ctxRef.current) ctxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    if (ctxRef.current.state === "suspended") ctxRef.current.resume().catch(() => {});
+    return ctxRef.current;
+  }
+  /** Short whoosh + chime sweeper, flavored by mode. ~0.9s. */
+  function jingle(): Promise<void> {
+    try {
+      const c = ac(), t = c.currentTime, m = modeRef.current;
+      const out = c.createGain(); out.gain.value = m === "focus" ? 0.12 : 0.22; out.connect(c.destination);
+      // whoosh: filtered noise sweep
+      const len = 0.8, buf = c.createBuffer(1, c.sampleRate * len, c.sampleRate), d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.sin((i / d.length) * Math.PI);
+      const n = c.createBufferSource(); n.buffer = buf;
+      const bp = c.createBiquadFilter(); bp.type = "bandpass"; bp.Q.value = 1.2;
+      const [f0, f1] = m === "gym" ? [500, 6000] : m === "focus" ? [200, 1200] : [300, 3500];
+      bp.frequency.setValueAtTime(f0, t); bp.frequency.exponentialRampToValueAtTime(f1, t + len);
+      const ng = c.createGain(); ng.gain.value = m === "focus" ? 0.25 : 0.5;
+      n.connect(bp).connect(ng).connect(out); n.start(t);
+      // chime: two notes
+      const notes = m === "gym" ? [880, 1318.5] : m === "drive" ? [659.3, 987.8] : m === "focus" ? [523.3] : [784, 1174.7];
+      notes.forEach((f, i) => {
+        const o = c.createOscillator(), g = c.createGain(); o.type = "sine"; o.frequency.value = f;
+        const st = t + 0.35 + i * 0.12;
+        g.gain.setValueAtTime(0, st); g.gain.linearRampToValueAtTime(0.35, st + 0.02); g.gain.exponentialRampToValueAtTime(0.001, st + 0.6);
+        o.connect(g).connect(out); o.start(st); o.stop(st + 0.65);
+      });
+      return sleep(m === "focus" ? 600 : 850).then(() => {});
+    } catch { return Promise.resolve(); }
+  }
+  /** Soft ambient pad under longer RJ breaks (only when no song is playing underneath). */
+  function startBed() {
+    try {
+      const c = ac(), t = c.currentTime;
+      const g = c.createGain(); g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.035, t + 1.2);
+      const lp = c.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 900;
+      lp.connect(g).connect(c.destination);
+      const chord = modeRef.current === "focus" ? [130.8, 196, 246.9] : [146.8, 220, 277.2, 329.6];
+      const oscs = chord.flatMap((f) => [0, 4].map((det) => { const o = c.createOscillator(); o.type = "triangle"; o.frequency.value = f; o.detune.value = det; o.connect(lp); o.start(t); return o; }));
+      bedRef.current = { stop: () => { const n = c.currentTime; g.gain.cancelScheduledValues(n); g.gain.setValueAtTime(g.gain.value, n); g.gain.linearRampToValueAtTime(0, n + 1); oscs.forEach((o) => o.stop(n + 1.1)); bedRef.current = null; } };
+    } catch { /* no web audio */ }
   }
 
   /** Free fallback voice (Web Speech API) so the RJ still talks when ElevenLabs fails. */
@@ -194,17 +273,20 @@ function LiveInner() {
   }
 
   // ---------- RJ segments (never throw: a failed RJ just means more music) ----------
-  async function buildSegment(p: Prefs, next: TrackInfo | null, prev: TrackInfo | null, index: number): Promise<Segment | null> {
+  async function buildSegment(p: Prefs, next: TrackInfo | null, prev: TrackInfo | null, index: number, plan: Plan = { kind: "full" }): Promise<Segment | null> {
+    if (plan.kind === "none") return null;
     try {
       const seg = await withTimeout(fetch("/api/segment", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prefs: p, next, prev, index, mode: modeRef.current, recent: recentRef.current.slice(-4), hour: new Date().getHours() }),
+        body: JSON.stringify({ prefs: p, next, prev, index, mode: modeRef.current, recent: recentRef.current.slice(-4), hour: new Date().getHours(), kind: plan.kind, withNews: !!plan.withNews, withJoke: !!plan.withJoke }),
       }).then((r) => { if (!r.ok) throw new Error(`segment ${r.status}`); return r.json(); }), 20000, "segment");
+      if (!seg.script) { log(`RJ chose silence (${plan.kind})`); return null; }
       recentRef.current.push(seg.script);
+      if (plan.withNews && seg.headlines?.length) lastNewsRef.current = Date.now();
       const lang = { english: "en-IN", hinglish: "hi-IN", hindi: "hi-IN", marathi: "mr-IN" }[p.language];
-      if (ttsQuotaRef.current) { log("ElevenLabs credits used up: browser voice"); return { script: seg.script, audioUrl: null, lang }; }
+      if (ttsQuotaRef.current) { log("ElevenLabs credits used up: browser voice"); return { script: seg.script, audioUrl: null, lang, kind: plan.kind }; }
       try {
-        const r = await withTimeout(fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: seg.script, voiceId: p.voiceId, energy: p.energy, mode: modeRef.current, language: p.language }) }), 30000, "voice");
+        const r = await withTimeout(fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: seg.script, voiceId: p.voiceId, energy: p.energy, mode: modeRef.current, language: p.language, mood: seg.mood }) }), 30000, "voice");
         if (!r.ok) {
           const j = await r.json().catch(() => ({}));
           if (j.code === "quota_exceeded") { ttsQuotaRef.current = true; setNotice("Voice service unavailable (ElevenLabs credits used up, Azure not set up). Using the browser voice for now."); setTimeout(() => setNotice(null), 6000); }
@@ -214,8 +296,8 @@ function LiveInner() {
         if (fb) log(`voice: ${prov} (fallback after ${fb})`);
         const blob = await r.blob();
         if (!blob.size || !/audio/.test(blob.type)) throw new Error(`voice returned ${blob.type || "nothing"} (${blob.size}B)`);
-        return { script: seg.script, audioUrl: URL.createObjectURL(blob), lang };
-      } catch (e) { log(`RJ voice failed, using browser voice: ${e}`); return { script: seg.script, audioUrl: null, lang }; }
+        return { script: seg.script, audioUrl: URL.createObjectURL(blob), lang, kind: plan.kind };
+      } catch (e) { log(`RJ voice failed, using browser voice: ${e}`); return { script: seg.script, audioUrl: null, lang, kind: plan.kind }; }
     } catch (e) { log(`RJ script failed: ${e}`); return null; }
   }
 
@@ -292,26 +374,61 @@ function LiveInner() {
     }
   }
 
-  async function playSdk(t: TrackInfo, sid: number) {
-    await playerRef.current.setVolume(0.0001).catch(() => {});
+  /** RJ voice over music: duck the song to ~25%, jingle, talk, then swell back. Non-blocking. */
+  const talkingRef = useRef<Promise<void> | null>(null);
+  const DUCK = 0.22;
+  function talkOver(seg: Segment) {
+    if (!seg.audioUrl) return;
+    setScript(seg.script); setSpeaking(true);
+    log(`talk-over (${seg.kind})`);
+    talkingRef.current = (async () => {
+      await fadeSdk(DUCK, 700);
+      await jingle();
+      await playClip(seg.audioUrl!, { maxMs: 60000, bindSkip: false });
+      setSpeaking(false);
+      if (phaseRef.current === "song") await fadeSdk(SONG_VOL, 1600);
+    })().finally(() => { talkingRef.current = null; });
+  }
+
+  /**
+   * In-browser playback with pro-FM transitions:
+   * - starts ducked if the RJ is still talking (outro of the last song bleeds into this intro), else quick fade-in
+   * - when ~10s remain and the next break is ready, the RJ talks over the outro (ducked)
+   * - otherwise fades out over the last ~3s and hands over with no gap
+   * Returns true if the prefetched break was already spoken over the outro.
+   */
+  async function playSdk(t: TrackInfo, sid: number, over?: Segment | null, outro?: Promise<Segment | null> | null): Promise<boolean> {
+    const talking = !!talkingRef.current;
+    await playerRef.current.setVolume(talking ? DUCK : 0.0001).catch(() => {});
     await startOn(deviceRef.current!, t);
-    fadeSdk(SONG_VOL, 1500);
-    let skipped = false, started = false, nullStates = 0;
+    if (over?.audioUrl) talkOver(over);
+    else if (!talking) fadeSdk(SONG_VOL, 1200);
+    let ready: Segment | null | undefined;
+    outro?.then((x) => { ready = x; }).catch(() => { ready = null; });
+    let skipped = false, started = false, nullStates = 0, usedOutro = false, fading = false;
     skipRef.current = () => { skipped = true; };
     const t0 = Date.now(), deadline = t0 + (t.durationMs ?? 240000) + 10000;
     while (alive(sid) && !skipped && Date.now() < deadline) {
-      await sleep(700);
+      await sleep(400);
       const st = await playerRef.current.getCurrentState().catch(() => null);
-      if (!st) { if (++nullStates > 12) throw new Error("web player lost playback"); continue; }
+      if (!st) { if (++nullStates > 20) throw new Error("web player lost playback"); continue; }
       nullStates = 0;
       if (!st.paused) started = true;
       if (!started && Date.now() - t0 > 10000) throw new Error("song never started");
       if (st.duration) setProgress(st.position / st.duration);
       if (started && st.paused && st.position === 0) break;
-      if (st.duration && st.position >= st.duration - 3500) break;
+      const left = st.duration ? st.duration - st.position : Infinity;
+      // RJ over the outro: start ~10s before the end (only for clips; switch lines wait for the gap)
+      if (!usedOutro && !talkingRef.current && left <= 10000 && left > 4000 && ready?.audioUrl && ready.kind !== "switch") {
+        usedOutro = true; talkOver(ready);
+      }
+      if (talkingRef.current) { if (left <= 700) break; continue; } // keep the bed of music under the voice until the very end
+      if (!fading && left <= 3200) { fading = true; fadeSdk(0.0001, 2600); }
+      if (left <= 500) break;
     }
-    await fadeSdk(0.0001, skipped ? 700 : 2500);
-    await playerRef.current.pause().catch(() => {});
+    if (skipped) await fadeSdk(0.0001, 600);
+    if (!talkingRef.current) await playerRef.current.pause().catch(() => {});
+    return usedOutro;
   }
 
   async function playConnect(t: TrackInfo, sid: number) {
@@ -335,14 +452,15 @@ function LiveInner() {
   }
 
   /** Returns true if the song played (or was skipped by the user), false on a playback failure. */
-  async function playSong(t: TrackInfo, sid: number): Promise<boolean> {
+  async function playSong(t: TrackInfo, sid: number, over?: Segment | null, outro?: Promise<Segment | null> | null): Promise<boolean | "outro"> {
     setNow(t); setProgress(0);
     const o = outRef.current;
     const t0 = Date.now();
     try {
       if ((o === "sdk" || o === "connect") && t.uri) {
         setPhase("song"); setStatus(o === "sdk" ? "" : `On ${diagRef.current.device}`);
-        if (o === "sdk") await playSdk(t, sid); else await playConnect(t, sid);
+        if (o === "sdk") return (await playSdk(t, sid, over, outro)) ? "outro" : true;
+        await playConnect(t, sid);
         return true;
       }
       if (t.previewUrl) { setPhase("song"); setStatus("30-second preview"); await playClip(t.previewUrl, { maxMs: 29000, fadeIn: true }); return true; }
@@ -373,6 +491,7 @@ function LiveInner() {
   async function goLive() {
     playerRef.current?.activateElement?.(); // must happen inside the tap
     new Audio().play().catch(() => {});
+    ac();
     const p = effPrefs();
     if (!p.voiceId) { window.location.href = "/welcome?step=voice"; return; }
     const sid = ++sessionRef.current;
@@ -382,7 +501,7 @@ function LiveInner() {
     setPhase("tuning"); setStatus("Tuning in…");
     outRef.current = await setupSpotify(sid);
     if (!alive(sid)) return;
-    curatorRef.current = outRef.current !== "none" ? new Curator(modeRef.current) : null;
+    curatorRef.current = outRef.current !== "none" ? new Curator(modeRef.current, loadPrefs().tasteSeeds ?? []) : null;
     const nextTrack = async (): Promise<TrackInfo | null> => {
       const c = curatorRef.current; if (!c) return null;
       for (let i = 0; i < 3; i++) { const t = await c.next().catch(() => null); if (t) return t; await sleep(3000); }
@@ -392,41 +511,65 @@ function LiveInner() {
     let prev: TrackInfo | null = null;
     let next = await nextTrack();
     setUpNext(next);
-    let pending: Promise<Segment | null> | null = buildSegment(effPrefs(), next, prev, 0);
+    sinceTalkRef.current = 0; sinceJokeRef.current = 1; lastNewsRef.current = 0; switchRef.current = null;
+    let pending: Promise<Segment | null> | null = buildSegment(effPrefs(), next, prev, 0, planBreak(0));
     let failures = 0;
+
+    const speak = async (seg: Segment) => {
+      if (talkingRef.current) await talkingRef.current;
+      setScript(seg.script); setPhase("rj"); setStatus(""); setNow(null);
+      await jingle();
+      const bed = seg.kind === "full" && seg.script.length > 140;
+      if (bed) startBed();
+      try { if (seg.audioUrl) await playClip(seg.audioUrl, { maxMs: 90000 }); else await speakBrowser(seg.script, seg.lang); }
+      finally { bedRef.current?.stop(); }
+    };
 
     for (let i = 0; alive(sid); i++) {
       try {
+        // Mode switched mid-stream: fresh track from the new mode + a short transition line, right now.
+        if (switchRef.current) {
+          switchRef.current = null;
+          next = await nextTrack(); setUpNext(next);
+          const sw = await buildSegment(effPrefs(), next, prev, i, { kind: "switch" });
+          if (!alive(sid)) break;
+          if (sw) await speak(sw);
+          pending = null;
+        }
+
+        let over: Segment | null = null;
         if (pending) {
-          setPhase("rj"); setStatus(""); setNow(null);
           const seg = await pending;
           if (!alive(sid)) break;
           if (seg) {
-            setScript(seg.script);
-            if (seg.audioUrl) await playClip(seg.audioUrl, { maxMs: 90000 }); else await speakBrowser(seg.script, seg.lang);
+            // stingers ride over the song intro when we control the volume (in-browser player)
+            if (seg.kind === "stinger" && seg.audioUrl && outRef.current === "sdk" && next) over = seg;
+            else await speak(seg);
           }
         }
         if (!alive(sid)) break;
+        if (switchRef.current) continue;
 
         if (!next) {
           setPhase("waiting");
           setStatus(outRef.current === "none" ? "Connect Spotify for music. Your RJ will keep you company." : "Finding more music…");
           await sleep(outRef.current === "none" ? 45000 : 8000);
-          if (outRef.current !== "none" && !curatorRef.current) curatorRef.current = new Curator(modeRef.current);
+          if (outRef.current !== "none" && !curatorRef.current) curatorRef.current = new Curator(modeRef.current, loadPrefs().tasteSeeds ?? []);
           next = await nextTrack(); setUpNext(next);
-          pending = outRef.current === "none" ? buildSegment(effPrefs(), null, prev, i + 1) : null;
+          pending = outRef.current === "none" ? buildSegment(effPrefs(), null, prev, i + 1, { kind: "full", withJoke: true }) : null;
           continue;
         }
 
         const current = next;
         const following = nextTrack();
-        const willTalk = (i + 1) % md().talkEvery === 0;
-        const prefetch = following.then((t) => { setUpNext(t); return willTalk ? buildSegment(effPrefs(), t, current, i + 1) : null; }).catch(() => null);
-        const ok = await playSong(current, sid);
+        const plan = planBreak(i + 1);
+        const prefetch = following.then((t) => { setUpNext(t); return buildSegment(effPrefs(), t, current, i + 1, plan); }).catch(() => null);
+        const res = await playSong(current, sid, over, plan.kind === "none" ? null : prefetch);
+        const ok = res !== false;
         if (!alive(sid)) break;
         prev = current;
         next = await following.catch(() => null);
-        pending = willTalk ? prefetch : null;
+        pending = plan.kind === "none" || res === "outro" ? null : prefetch;
         if (ok) failures = 0;
         else if (++failures >= 2) { await recover(sid, "two songs failed"); failures = 0; }
       } catch (e) {
@@ -440,6 +583,7 @@ function LiveInner() {
   function stop(msg?: string) {
     sessionRef.current++; skipRef.current();
     audioRef.current?.pause(); playerRef.current?.pause().catch(() => {});
+    bedRef.current?.stop(); setSpeaking(false); talkingRef.current = null;
     wakeRef.current?.release?.().catch(() => {});
     setPhase("idle"); setNow(null); setUpNext(null); setScript(""); setStatus("");
     setNotice(msg ?? null);
@@ -487,7 +631,7 @@ function LiveInner() {
                 </div>
               )}
             </div>
-            {phase === "rj" && (
+            {(phase === "rj" || speaking) && (
               <div className="glass absolute -bottom-4 left-1/2 flex -translate-x-1/2 items-end gap-[3px] rounded-full px-3.5 py-2">
                 {[0, 1, 2, 3, 4].map((b) => <span key={b} className="w-[3px] origin-bottom animate-[eq_0.9s_ease-in-out_infinite] rounded-full bg-fuchsia-300" style={{ animationDelay: `${b * 0.12}s`, height: 12 }} />)}
                 <span className="ml-2 text-[11px] font-medium">{rjName}</span>
