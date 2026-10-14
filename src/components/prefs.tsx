@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 import { useEffect, useRef, useState } from "react";
-import { DEFAULT_PREFS, ENERGIES, HUMORS, LANGUAGES, MODES, loadPrefs, savePrefs, type Prefs, type TrackInfo } from "@/lib/prefs";
+import { SONG_LANGS, toggleSongLang, DEFAULT_PREFS, ENERGIES, HUMORS, LANGUAGES, MODES, loadPrefs, savePrefs, type Prefs, type TrackInfo } from "@/lib/prefs";
 import { getMe } from "@/lib/spotifyClient";
 import { Button, Chip, Section, Spinner, cx, inputCls } from "./ui";
 import { AccountPanel } from "./account";
@@ -231,6 +231,8 @@ export function AllPrefs({ p, up, compact, returnTo }: { p: Prefs; up: Up; compa
       <Section title="Energy"><EnergyPicker p={p} up={up} /></Section>
       <Section title="Humor" hint="From squeaky clean to pitch dark."><HumorPicker p={p} up={up} /></Section>
       <Section title="News" hint="Only these topics make it on air."><TopicsEditor p={p} up={up} /></Section>
+      <Section title="Song language" hint="Which songs to play. Your RJ's speaking language is set above."><SongLangPicker p={p} up={up} /></Section>
+      <Section title="Your RJ talks about"><TalkToggles p={p} up={up} /></Section>
       <Section title="Default mode"><ModePicker value={p.defaultMode} onChange={(m) => up("defaultMode", m)} /></Section>
       <Section title="Spotify"><SpotifyConnect returnTo={returnTo} /></Section>
       <Section title="Add your music from anywhere" hint="Screenshots from YouTube Music, Apple Music, JioSaavn, a playlist link, or a typed list. MyRJ finds them on Spotify and leans your radio towards them."><MusicImport p={p} up={up} /></Section>
@@ -363,3 +365,29 @@ export function MusicImport({ p, up }: { p: Prefs; up: Up }) {
   );
 }
 
+
+export function SongLangPicker({ p, up, small }: { p: Prefs; up: Up; small?: boolean }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {SONG_LANGS.map((l) => {
+        const on = p.songLangs.includes(l.id);
+        return <button key={l.id} type="button" aria-pressed={on} onClick={() => up("songLangs", toggleSongLang(p.songLangs, l.id))}
+          className={cx("rounded-full border px-3.5 transition active:scale-95", small ? "h-8 text-[13px]" : "h-9 text-sm", on ? "border-[#f3efe8] bg-[#f3efe8] text-[#141210]" : "border-white/10 text-zinc-300 hover:border-white/25")}>{l.label}</button>;
+      })}
+    </div>
+  );
+}
+export function TalkToggles({ p, up, small }: { p: Prefs; up: Up; small?: boolean }) {
+  const pill = (on: boolean) => cx("rounded-full border px-3.5 transition active:scale-95 disabled:opacity-35", small ? "h-8 text-[13px]" : "h-9 text-sm", on ? "border-[#f3efe8] bg-[#f3efe8] text-[#141210]" : "border-white/10 text-zinc-300 hover:border-white/25");
+  const t = p.talk;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {(["news", "jokes", "facts"] as const).map((k) => (
+        <button key={k} type="button" aria-pressed={t[k] && !p.justMusic} disabled={p.justMusic} onClick={() => up("talk", { ...t, [k]: !t[k] })} className={pill(t[k] && !p.justMusic)}>
+          {k === "news" ? "News" : k === "jokes" ? "Jokes" : "Song facts"}
+        </button>
+      ))}
+      <button type="button" aria-pressed={p.justMusic} onClick={() => up("justMusic", !p.justMusic)} className={pill(p.justMusic)}>Just music</button>
+    </div>
+  );
+}

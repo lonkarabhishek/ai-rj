@@ -17,6 +17,9 @@ export interface Prefs {
   tasteSeeds: TrackInfo[]; // songs imported from screenshots/links/lists, matched on Spotify
   defaultMode: ListenMode;
   vibe?: string; // retired feature; old saved values are ignored
+  songLangs: SongLang[]; // song language(s) for curation; ["any"] = no filter. Separate from the RJ's speaking language.
+  talk: { news: boolean; jokes: boolean; facts: boolean };
+  justMusic: boolean; // RJ keeps to minimal intros (silent in Focus)
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -32,7 +35,21 @@ export const DEFAULT_PREFS: Prefs = {
   onboarded: false,
   tasteSeeds: [],
   defaultMode: "default",
+  songLangs: ["any"],
+  talk: { news: true, jokes: true, facts: true },
+  justMusic: false,
 };
+export type SongLang = "any" | "hindi" | "english" | "punjabi" | "marathi" | "tamil" | "telugu";
+export const SONG_LANGS: { id: SongLang; label: string }[] = [
+  { id: "any", label: "Any" }, { id: "hindi", label: "Hindi" }, { id: "english", label: "English" }, { id: "punjabi", label: "Punjabi" },
+  { id: "marathi", label: "Marathi" }, { id: "tamil", label: "Tamil" }, { id: "telugu", label: "Telugu" },
+];
+export function toggleSongLang(cur: SongLang[], id: SongLang): SongLang[] {
+  if (id === "any") return ["any"];
+  const base = cur.filter((x) => x !== "any");
+  const next = base.includes(id) ? base.filter((x) => x !== id) : [...base, id];
+  return next.length ? next : ["any"];
+}
 
 export const LANGUAGES: { id: Language; label: string }[] = [
   { id: "english", label: "English" },
@@ -48,7 +65,9 @@ export function loadPrefs(): Prefs {
   if (typeof window === "undefined") return DEFAULT_PREFS;
   try {
     const raw = localStorage.getItem(KEY);
-    return raw ? { ...DEFAULT_PREFS, ...JSON.parse(raw) } : DEFAULT_PREFS;
+    if (!raw) return DEFAULT_PREFS;
+    const j = JSON.parse(raw);
+    return { ...DEFAULT_PREFS, ...j, talk: { ...DEFAULT_PREFS.talk, ...(j.talk ?? {}) }, songLangs: Array.isArray(j.songLangs) && j.songLangs.length ? j.songLangs : ["any"] };
   } catch {
     return DEFAULT_PREFS;
   }
@@ -68,6 +87,7 @@ export interface TrackInfo {
   previewUrl?: string | null;
   spotifyUrl?: string;
   image?: string;
+  artistIds?: string[];
 }
 
 export type ListenMode = "default" | "gym" | "drive" | "focus";

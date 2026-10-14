@@ -4,6 +4,17 @@ import { llmScript, splitMood, templateScript, type SegmentInput } from "@/lib/s
 export async function POST(req: Request) {
   const body = (await req.json()) as Omit<SegmentInput, "headlines">;
   const { prefs, index } = body;
+  // Per-session "RJ talks about" toggles: turned-off types never happen (LLM and template alike).
+  const talk = Object.assign({ news: true, jokes: true, facts: true }, prefs.talk);
+  if (prefs.justMusic) { talk.news = false; talk.jokes = false; talk.facts = false; }
+  prefs.talk = talk;
+  if (!talk.jokes) body.withJoke = false;
+  if (!talk.news) body.withNews = false;
+  const minimal = !talk.news && !talk.jokes && !talk.facts;
+  if (minimal && body.kind !== "switch") {
+    if (body.mode === "focus" || (prefs.justMusic && body.kind === "stinger")) return Response.json({ script: "", mood: "calm", kind: body.kind ?? "full", mode: "skip", headlines: [] });
+    body.kind = "stinger"; body.index = Math.max(1, index); // just a short transition naming the next song
+  }
   const wantNews = body.withNews ?? ((!body.mode || body.mode === "default" || body.mode === "drive") && index % 2 === 0);
   const headlines = wantNews && body.kind !== "stinger" && prefs.newsTopics?.length ? await fetchHeadlines(prefs.newsTopics, prefs.language, 6) : [];
   // shuffle so repeated segments vary

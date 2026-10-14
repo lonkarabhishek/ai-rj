@@ -5,7 +5,7 @@ import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { isOnboarded, loadPrefs, MODES, type ListenMode, type Prefs, type TrackInfo } from "@/lib/prefs";
 import { Curator, getMe, getToken, getTokenInfo, sp, SpotifyError } from "@/lib/spotifyClient";
-import { AllPrefs, usePrefs } from "@/components/prefs";
+import { AllPrefs, SongLangPicker, TalkToggles, usePrefs } from "@/components/prefs";
 import { cx, Spinner } from "@/components/ui";
 import { Lyrics } from "@/components/Lyrics";
 import { Mascot } from "@/components/Mascot";
@@ -61,6 +61,9 @@ function LiveInner() {
   const skipRef = useRef<() => void>(() => {});
   // ---- playback control: one source of truth. desired (optimistic, what the button shows) vs applied (what we told Spotify/audio) ----
   const [paused, setPaused] = useState(false);
+  const [picker, setPicker] = useState(false);
+  const [pickerMode, setPickerMode] = useState<ListenMode>("default");
+  const [pickerLangs, setPickerLangs] = useState("");
   const pausedRef = useRef(false);
   const appliedPauseRef = useRef(false);
   const ctlBusyRef = useRef(false);
@@ -262,11 +265,24 @@ function LiveInner() {
     skipRef.current();
   }
 
+  /** Idle picker: mode is just the starting mode (remembered as default). */
+  function pickMode(m: ListenMode) { setListenMode(m); modeRef.current = m; up("defaultMode", m); }
+  /** "Change" sheet closed: apply mode (with the RJ switch line) and/or song languages (fresh queue from the next song). */
+  function closePicker() {
+    setPicker(false);
+    const langsChanged = loadPrefs().songLangs.join() !== pickerLangs;
+    if (pickerMode !== modeRef.current) { up("defaultMode", pickerMode); changeMode(pickerMode); return; }
+    if (langsChanged && phaseRef.current !== "idle" && outRef.current !== "none") {
+      curatorRef.current = new Curator(modeRef.current, loadPrefs().tasteSeeds ?? [], loadPrefs().songLangs);
+      setNotice(`Songs in ${langSummary(loadPrefs().songLangs)} from the next track.`); setTimeout(() => setNotice(null), 3500);
+    }
+  }
+
   function changeMode(m: ListenMode) {
     if (m === modeRef.current) return;
     setListenMode(m); modeRef.current = m;
     if (phaseRef.current !== "idle") {
-      if (outRef.current !== "none") curatorRef.current = new Curator(m, loadPrefs().tasteSeeds ?? []);
+      if (outRef.current !== "none") curatorRef.current = new Curator(m, loadPrefs().tasteSeeds ?? [], loadPrefs().songLangs);
       switchRef.current = m;
       setNotice(`Switching to ${MODES.find((x) => x.id === m)!.label}…`);
       setTimeout(() => setNotice(null), 3000);
@@ -285,6 +301,7 @@ function LiveInner() {
       gym: { none: 0.5, stinger: 0.5, maxGap: 3 },
       focus: { none: 0.8, stinger: 0.2, maxGap: 6 },
     }[m];
+    if (loadPrefs().justMusic) { cfg.none = Math.max(cfg.none, 0.7); cfg.maxGap = Math.max(cfg.maxGap, 4); }
     let kind: BreakKind = r < cfg.none ? "none" : r < cfg.none + cfg.stinger ? "stinger" : "full";
     if (kind === "none" && since >= cfg.maxGap) kind = m === "gym" || m === "focus" ? "stinger" : "full";
     if ((m === "gym" || m === "focus") && kind === "full" && outRef.current === "sdk") kind = "stinger";
@@ -294,8 +311,9 @@ function LiveInner() {
     if (kind === "none") return { kind };
     sinceTalkRef.current = 0;
     const newsDue = Date.now() - lastNewsRef.current > 22 * 60 * 1000;
-    const withNews = kind === "full" && newsDue && (m === "default" || m === "drive");
-    const withJoke = kind === "full" && ++sinceJokeRef.current >= 2 && Math.random() < 0.6;
+    const tp = loadPrefs();
+    const withNews = kind === "full" && newsDue && (m === "default" || m === "drive") && tp.talk.news && !tp.justMusic;
+    const withJoke = kind === "full" && ++sinceJokeRef.current >= 2 && Math.random() < 0.6 && tp.talk.jokes && !tp.justMusic;
     if (withJoke) sinceJokeRef.current = 0;
     return { kind, withNews, withJoke };
   }
@@ -719,7 +737,7 @@ function LiveInner() {
     const t0 = performance.now(), times: string[] = [];
     const timed = <T,>(name: string, pr: Promise<T>) => pr.finally(() => { times.push(`${name} ${((performance.now() - t0) / 1000).toFixed(1)}s`); setDiag({ timings: times.join(" · ") }); });
     bootStep("spotify", "Connecting to Spotify…");
-    const curator = new Curator(modeRef.current, loadPrefs().tasteSeeds ?? []);
+    const curator = new Curator(modeRef.current, loadPrefs().tasteSeeds ?? [], loadPrefs().songLangs);
     const nextFrom = async (c: Curator | null): Promise<TrackInfo | null> => {
       if (!c) return null;
       for (let i = 0; i < 3; i++) { const t = await c.next().catch(() => null); if (t) return t; await sleep(1500); }
@@ -790,7 +808,7 @@ function LiveInner() {
           setPhase("waiting");
           setStatus(outRef.current === "none" ? "Connect Spotify for music. Your RJ will keep you company." : "Finding more music…");
           await sleep(outRef.current === "none" ? 45000 : 8000);
-          if (outRef.current !== "none" && !curatorRef.current) curatorRef.current = new Curator(modeRef.current, loadPrefs().tasteSeeds ?? []);
+          if (outRef.current !== "none" && !curatorRef.current) curatorRef.current = new Curator(modeRef.current, loadPrefs().tasteSeeds ?? [], loadPrefs().songLangs);
           next = await nextTrack(); setUpNext(next);
           pending = outRef.current === "none" ? buildSegment(effPrefs(), null, prev, i + 1, { kind: "full", withJoke: true }) : null;
           continue;
@@ -836,7 +854,7 @@ function LiveInner() {
   return (
     <main className="ambient relative min-h-dvh w-full overflow-x-hidden" onClick={() => notice?.startsWith("Tap anywhere") && setNotice(null)}>
       {art && <img src={art} alt="" className="pointer-events-none fixed inset-0 -z-10 h-full w-full scale-150 object-cover opacity-30 blur-[80px] transition-opacity duration-1000" />}
-      <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-[calc(max(0.75rem,env(safe-area-inset-bottom))+5.75rem)] pt-[max(1rem,env(safe-area-inset-top))] sm:px-6">
+      <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))] sm:px-6">
         {/* top bar */}
         <header className="flex h-10 items-center justify-between">
           <Link href="/settings" className="flex items-center gap-2 text-[15px] font-semibold tracking-tight">
@@ -850,12 +868,18 @@ function LiveInner() {
           </div>
         </header>
 
-        <ModeDock value={listenMode} onChange={changeMode} />
+        {live && (
+          <div className="mt-3 flex items-center justify-center gap-2 text-[12px] text-zinc-500">
+            <span>{MODES.find((m) => m.id === listenMode)!.label}</span><span className="text-zinc-700">·</span>
+            <span className="max-w-[45%] truncate">{langSummary(prefs.songLangs)}</span>{prefs.justMusic && <><span className="text-zinc-700">·</span><span>Just music</span></>}
+            <button onClick={() => { setPickerMode(listenMode); setPickerLangs(prefs.songLangs.join()); setPicker(true); }} className="ml-1 text-[#f3efe8] underline-offset-2 hover:underline">Change</button>
+          </div>
+        )}
 
         {/* stage */}
         <section className="flex min-h-0 flex-1 flex-col items-center justify-center py-4 text-center sm:py-8">
           <div className="relative">
-            <div className={cx("aspect-square w-[min(64vw,280px,30svh)] transition-transform", art && "overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]", " duration-700", speaking || phase === "rj" ? "scale-[0.72]" : phase === "song" ? "scale-100" : "scale-[0.94]")}>
+            <div className={cx("aspect-square transition-transform", phase === "idle" ? "w-[min(38vw,150px,19svh)]" : "w-[min(64vw,280px,30svh)]", art && "overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]", " duration-700", speaking || phase === "rj" ? "scale-[0.72]" : phase === "song" ? "scale-100" : "scale-[0.94]")}>
               {art ? <img key={art} src={art} alt="" className="fade-up h-full w-full object-cover" /> : (
                 <div className="relative flex h-full w-full items-center justify-center">
                   <Mascot state={phase === "rj" || speaking ? "talking" : phase === "tuning" || phase === "recovering" ? "tuning" : live ? "live" : "idle"} className="w-[78%]" getLevel={voiceLevel} />
@@ -871,7 +895,7 @@ function LiveInner() {
             )}
           </div>
 
-          <div className="mt-6 min-h-[84px] w-full sm:mt-10">
+          <div className={cx("min-h-[84px] w-full", live ? "mt-6 sm:mt-10" : "mt-4 sm:mt-6")}>
             {(phase === "rj" || speaking) && script ? (
               <Lyrics key={script} text={script} clock={clock} />
             ) : phase === "song" || (phase === "waiting" && now) ? (
@@ -881,18 +905,17 @@ function LiveInner() {
               </div>
             ) : phase === "tuning" ? (
               <BootStatus boot={boot} onRetry={() => { stop(); setTimeout(goLive, 50); }} />
+            ) : !live ? (
+              <SessionPicker mode={listenMode} onMode={pickMode} p={prefs} up={up} />
             ) : (
-              <div className="fade-up">
-                <h1 className="text-[22px] font-semibold tracking-tight sm:text-[26px]">{live ? rjName : `${rjName} is ready`}</h1>
-                <p className="mx-auto mt-1 max-w-[30ch] text-balance text-[14px] text-zinc-500 sm:text-[15px]">{live ? "" : `${MODES.find((m) => m.id === listenMode)!.blurb}. One tap and it never stops.`}</p>
-              </div>
+              <div className="fade-up"><h1 className="text-[22px] font-semibold tracking-tight sm:text-[26px]">{rjName}</h1></div>
             )}
           </div>
 
-          <div className={cx("mt-4 h-1 w-full overflow-hidden rounded-full bg-white/10 transition-opacity", phase !== "song" && "opacity-0")}>
+          {live && <><div className={cx("mt-4 h-1 w-full overflow-hidden rounded-full bg-white/10 transition-opacity", phase !== "song" && "opacity-0")}>
             <div className={cx("h-full rounded-full bg-white transition-[width] duration-700 ease-linear", phase !== "song" && "opacity-0")} style={{ width: `${progress * 100}%` }} />
           </div>
-          <p className="mt-3 h-4 text-xs text-zinc-500" aria-live="polite">{paused && live ? "Paused" : status}</p>
+          <p className="mt-3 h-4 text-xs text-zinc-500" aria-live="polite">{paused && live ? "Paused" : status}</p></>}
           {now && (outRef.current === "preview" || phase === "waiting") && now.spotifyUrl && <a href={now.spotifyUrl} target="_blank" rel="noreferrer" className="mt-2 text-xs text-[#1DB954]">Open in Spotify ↗</a>}
         </section>
 
@@ -959,6 +982,17 @@ function LiveInner() {
         )}
       </div>
 
+      {picker && (
+        <div className="fixed inset-0 z-50">
+          <div className="fade-up absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={closePicker} />
+          <div className="sheet-up absolute inset-x-0 bottom-0 mx-auto max-w-md rounded-t-[28px] border-t border-white/10 bg-[#0d0c0b]/95 px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur-xl">
+            <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-white/15" />
+            <SessionPicker mode={pickerMode} onMode={setPickerMode} p={prefs} up={up} />
+            <button onClick={closePicker} className="mt-5 h-12 w-full rounded-full bg-[#f3efe8] text-[15px] font-semibold text-[#141210] active:scale-[0.98]">Done</button>
+          </div>
+        </div>
+      )}
+
       {/* edit drawer */}
       {drawer && (
         <div className="fixed inset-0 z-50">
@@ -986,25 +1020,6 @@ const DOCK_ICONS: Record<ListenMode, React.ReactNode> = {
   drive: <path d="M5 16V11l2-5h10l2 5v5M5 16h14M5 16v2M19 16v2M7.5 13h.01M16.5 13h.01" />,
   focus: <path d="M4 15v-3a8 8 0 0 1 16 0v3M4 15a2 2 0 0 0 2 2h1v-5H6a2 2 0 0 0-2 2Zm16 0a2 2 0 0 1-2 2h-1v-5h1a2 2 0 0 1 2 2Z" />,
 };
-/** Floating liquid-glass mode dock (iOS 26 tab bar style) with a sliding lens. */
-function ModeDock({ value, onChange }: { value: ListenMode; onChange: (m: ListenMode) => void }) {
-  const idx = Math.max(0, MODES.findIndex((m) => m.id === value));
-  return (
-    <nav aria-label="Listening mode" className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-      <div className="liquid-glass pointer-events-auto relative grid w-full max-w-[380px] grid-cols-4 rounded-full p-1.5">
-        <span aria-hidden className="liquid-lens absolute bottom-1.5 left-1.5 top-1.5 rounded-full"
-          style={{ width: "calc((100% - 0.75rem) / 4)", transform: `translateX(${idx * 100}%)` }} />
-        {MODES.map((m) => (
-          <button key={m.id} onClick={() => { onChange(m.id); navigator.vibrate?.(8); }} aria-pressed={value === m.id}
-            className={cx("relative z-10 flex h-[52px] flex-col items-center justify-center gap-0.5 rounded-full text-[10.5px] font-medium transition-[color,transform] duration-200 active:scale-[0.9]", value === m.id ? "text-white" : "text-zinc-400 hover:text-zinc-200")}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{DOCK_ICONS[m.id]}</svg>
-            {m.label}
-          </button>
-        ))}
-      </div>
-    </nav>
-  );
-}
 
 /** Honest start-up progress: hidden for the first 300ms, each step shown at least 600ms, cross-faded, and a nudge + retry after 8s. */
 function BootStatus({ boot, onRetry }: { boot: { step: string; label: string; since: number } | null; onRetry: () => void }) {
@@ -1030,6 +1045,35 @@ function BootStatus({ boot, onRetry }: { boot: { step: string; label: string; si
           Taking a bit longer than usual{boot?.step === "device" ? ", is Spotify open somewhere?" : boot?.step === "rj" ? ", the RJ is still writing" : ""}. <button onClick={onRetry} className="text-[#f3efe8] underline-offset-2 hover:underline">Retry</button>
         </p>
       )}
+    </div>
+  );
+}
+
+function langSummary(l: Prefs["songLangs"]) {
+  if (!l?.length || l.includes("any")) return "Any language";
+  const names = l.map((x) => x[0].toUpperCase() + x.slice(1));
+  return names.length > 2 ? `${names.slice(0, 2).join(", ")} +${names.length - 2}` : names.join(", ");
+}
+
+/** Pre-live picker: mode (single), song languages (multi), what the RJ talks about. Compact enough for a phone without scrolling. */
+function SessionPicker({ mode, onMode, p, up }: { mode: ListenMode; onMode: (m: ListenMode) => void; p: Prefs; up: <K extends keyof Prefs>(k: K, v: Prefs[K]) => void }) {
+  const label = "mb-2 text-left text-[11px] font-medium uppercase tracking-[0.14em] text-zinc-500";
+  return (
+    <div className="fade-up w-full space-y-4 text-left">
+      <div>
+        <p className={label}>Mode</p>
+        <div className="grid grid-cols-4 gap-1.5" role="radiogroup" aria-label="Mode">
+          {MODES.map((m) => (
+            <button key={m.id} role="radio" aria-checked={mode === m.id} onClick={() => onMode(m.id)}
+              className={cx("flex h-[60px] flex-col items-center justify-center gap-1 rounded-2xl border text-[12px] font-medium transition active:scale-95", mode === m.id ? "border-[#f3efe8] bg-[#f3efe8] text-[#141210]" : "border-white/10 text-zinc-300 hover:border-white/25")}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{DOCK_ICONS[m.id]}</svg>
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div><p className={label}>Songs in</p><SongLangPicker p={p} up={up} small /></div>
+      <div><p className={label}>RJ talks about</p><TalkToggles p={p} up={up} small /></div>
     </div>
   );
 }

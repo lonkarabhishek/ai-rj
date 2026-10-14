@@ -147,6 +147,7 @@ function templateInner(input: SegmentInput): string {
     const tl = trackLine(next);
     if (!tl) return "";
     if (mode === "gym" || mode === "focus") return pick(MODE_LINES[mode][k]).replace("{me}", prefs.listenerName).replace("{track}", tl);
+    if (prefs.justMusic || (prefs.talk && !prefs.talk.news && !prefs.talk.jokes && !prefs.talk.facts)) return pick(UPNEXT[k]).replace("{t}", tl) + "."; // listener asked for minimal intros
     return ""; // never a bare "Up next: <song>": stay silent when Claude couldn't write a real line
   }
   return templateFull(input);
@@ -170,12 +171,12 @@ function templateFull({ prefs, next, index, headlines, mode = "default", hour: i
     const g0 = index === 0 ? "" : pick(GREET[k]).replace("{rj}", prefs.rjName).replace("{me}", me);
     const g = g0 && !/[?!]$/.test(g0) ? g0 + "!" : g0;
     const news = headlines[0] ? `${k === "en" ? "On the news front" : k === "hl" ? "Ek quick khabar" : k === "hi" ? "एक ताज़ा खबर" : "एक ताजी बातमी"}: ${shortTitle(headlines[0].title)}.` : "";
-    const joke = prefs.humor !== "off" && withJoke !== false ? jokeFor(prefs.humor, prefs.language) : "";
+    const joke = prefs.humor !== "off" && withJoke !== false && prefs.talk?.jokes !== false ? jokeFor(prefs.humor, prefs.language) : "";
     return [(intro + g).trim(), fill(pick(MODE_LINES.drive[k])), news, joke, upnext].filter(Boolean).join(" ");
   }
   const { rjName, listenerName: me, language, humor, energy } = prefs;
   const hype = energy === "hype" ? "!" : ".";
-  const joke = withJoke === false ? "" : jokeFor(humor, language);
+  const joke = withJoke === false || prefs.talk?.jokes === false ? "" : jokeFor(humor, language);
   const news = headlines.slice(0, 2).map((h) => ({ ...h, title: shortTitle(h.title) }));
   const tl = trackLine(next);
   const parts: string[] = [];
@@ -276,7 +277,8 @@ export async function llmScript(input: SegmentInput): Promise<string | null> {
   const stinger = input.kind === "stinger" && index > 0;
   const isSwitch = input.kind === "switch";
   const wantNews = !stinger && !isSwitch && mode !== "gym" && mode !== "focus" && headlines.length > 0;
-  const wantJoke = !stinger && !isSwitch && mode !== "gym" && mode !== "focus" && prefs.humor !== "off" && input.withJoke !== false;
+  const wantJoke = !stinger && !isSwitch && mode !== "gym" && mode !== "focus" && prefs.humor !== "off" && input.withJoke !== false && prefs.talk?.jokes !== false;
+  const noFacts = prefs.talk?.facts === false;
   const user = [
     `Break number ${index + 1}. Listener's local time: ${timeOfDay}.`,
     index === 0 ? "This is the show opener: welcome them in." : `Song that just finished: ${trackLine(prev) || "unknown"}.`,
@@ -286,7 +288,8 @@ export async function llmScript(input: SegmentInput): Promise<string | null> {
       "This is a full break: 2 to 4 sentences, under 70 words total. Only say things worth saying; if you truly have nothing good, reply SKIP.",
     prefs.language === "hindi" || prefs.language === "marathi" ? `Write in ${prefs.language === "hindi" ? "Hindi" : "Marathi"} using Devanagari script (song and artist names may stay in English).` : prefs.language === "hinglish" ? "Write in Hinglish, Roman script." : "Write in English.",
     wantNews ? `Headlines to weave in (pick one or two): ${headlines.slice(0, 3).map((x) => x.title).join(" | ")}` : "No news in this break.",
-    wantJoke ? "Include one joke with a real punchline in their humor style." : "",
+    wantJoke ? "Include one joke with a real punchline in their humor style." : "No jokes in this break.",
+    noFacts ? "Do NOT share song or artist facts or trivia; just name the song and the mood." : "",
     input.recent?.length ? `Your recent breaks (do NOT repeat their openers, jokes or phrasing):\n- ${input.recent.slice(-4).join("\n- ")}` : "",
   ].filter(Boolean).join("\n");
   const clean = (t?: string | null) => t?.replace(/[*_#`]/g, "").replace(/^(\s*\[[a-z]+\]\s*)?["']/i, "$1").replace(/["']$/, "").replace(/\s+/g, " ").trim() || null;

@@ -2,7 +2,7 @@
 import { Mascot } from "@/components/Mascot";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
-import { EnergyPicker, HumorPicker, LanguagePicker, ModePicker, MusicImport, NameFields, SpotifyConnect, TopicsEditor, VoicePicker, usePrefs } from "@/components/prefs";
+import { EnergyPicker, HumorPicker, LanguagePicker, ModePicker, SongLangPicker, MusicImport, NameFields, SpotifyConnect, TopicsEditor, VoicePicker, usePrefs } from "@/components/prefs";
 import { Button, cx } from "@/components/ui";
 
 const STEPS = ["welcome", "names", "language", "voice", "energy", "humor", "news", "spotify", "mode"] as const;
@@ -15,7 +15,7 @@ const COPY: Record<(typeof STEPS)[number], { title: string; sub: string }> = {
   humor: { title: "What's your humor?", sub: "Your RJ drops a joke between songs." },
   news: { title: "What should you never miss?", sub: "One or two headlines between songs, only on these." },
   spotify: { title: "Bring your music.", sub: "MyRJ curates from your Spotify: top tracks, likes, playlists and new finds. Premium plays full songs." },
-  mode: { title: "Your usual vibe?", sub: "You can switch modes anytime while live." },
+  mode: { title: "How do you listen?", sub: "Pick a mode and song languages. You can change both before every session." },
 };
 
 function Flow() {
@@ -66,7 +66,12 @@ function Flow() {
               </div>
             </div>
           )}
-          {step === "mode" && <ModePicker value={p.defaultMode} onChange={(m) => up("defaultMode", m)} />}
+          {step === "mode" && (
+            <div className="space-y-6">
+              <ModePicker value={p.defaultMode} onChange={(m) => up("defaultMode", m)} />
+              <div><p className="mb-2 text-[11px] font-medium uppercase tracking-[0.14em] text-zinc-500">Songs in</p><SongLangPicker p={p} up={up} /></div>
+            </div>
+          )}
         </div>
       </div>
 
