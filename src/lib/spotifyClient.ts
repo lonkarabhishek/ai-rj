@@ -39,7 +39,7 @@ export class SpotifyError extends Error {
   constructor(public status: number, msg: string) { super(`Spotify ${status}: ${msg}`); }
 }
 
-// ---- shared rate limiter: one backoff window for the whole app, honouring Retry-After; max 3 calls in flight ----
+// ---- shared rate limiter: one backoff window for the whole app, honouring Retry-After; max 5 calls in flight ----
 let blockedUntil = 0;
 let inFlight = 0;
 const waiters: (() => void)[] = [];
@@ -48,7 +48,7 @@ function announce() {
   try { window.dispatchEvent(new CustomEvent("spotify-backoff", { detail: { until: blockedUntil } })); } catch { /* ssr */ }
 }
 async function slot() {
-  if (inFlight < 3) { inFlight++; return; }
+  if (inFlight < 5) { inFlight++; return; }
   await new Promise<void>((r) => waiters.push(r)); inFlight++;
 }
 function release() { inFlight--; waiters.shift()?.(); }
@@ -310,7 +310,7 @@ export class Curator {
     const [s, m, l, saved, artists] = await Promise.all([
       this.safe(async () => this.map((await sp<any>("/me/top/tracks?limit=50&time_range=short_term")).items ?? [])),
       this.safe(async () => this.map((await sp<any>("/me/top/tracks?limit=50&time_range=medium_term")).items ?? [])),
-      this.safe(async () => this.map((await sp<any>("/me/top/tracks?limit=50&time_range=long_term")).items ?? [])),
+      Promise.resolve([] as TrackInfo[]), // long-term favourites load later (fewer calls at start-up)
       this.safe(async () => {
         const offs = [0, 50];
         const pages = await Promise.all(offs.map((o) => sp<any>(`/me/tracks?limit=50&offset=${o}`).catch(() => ({ items: [] }))));
@@ -318,6 +318,7 @@ export class Curator {
       }),
       sp<any>("/me/top/artists?limit=20&time_range=medium_term").then((j) => j.items ?? []).catch(() => []),
     ]);
+    this.safe(async () => this.map((await sp<any>("/me/top/tracks?limit=50&time_range=long_term")).items ?? [])).then((lt) => { this.pools.top = [...(this.pools.top ?? []), ...lt]; });
     this.pools = { top: [...s, ...m, ...l], saved, playlists: this.pools.playlists ?? [], seeds: this.seeds };
     this.artists = artists.map((a: any) => ({ id: a.id, name: a.name, genres: a.genres ?? [] }));
   }
