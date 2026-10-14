@@ -14,19 +14,17 @@ export function Mascot({ state = "idle", className }: { state?: "idle" | "live" 
     return () => clearTimeout(t);
   }, [state]);
   return (
-    <svg viewBox="0 0 120 120" className={cx("mascot", `mascot-${state}`, blink && "is-blink", className)} role="img" aria-label="MyRJ radio mascot">
-      <defs>
-        <linearGradient id="mbody" x1="0" y1="0" x2="0.4" y2="1"><stop offset="0" stopColor="#ffa494" /><stop offset="1" stopColor="#ff7a6b" /></linearGradient>
-      </defs>
+    <svg viewBox="0 0 120 120" className={cx("mascot", `mascot-${state}`, blink && "is-blink", className)} role="img" aria-label="MyRJ mascot">
       <g className="m-body">
-        <line x1="74" y1="40" x2="86" y2="17" stroke="#ff8a7a" strokeWidth="6" strokeLinecap="round" />
-        <circle className="m-tip" cx="87" cy="15" r="7" fill="#7fe0c0" />
-        <rect x="16" y="36" width="88" height="70" rx="30" fill="url(#mbody)" />
-        <g className="m-eyes" fill="#1a1312">
-          <rect x="40" y="58" width="9" height="15" rx="4.5" />
-          <rect x="62" y="58" width="9" height="15" rx="4.5" />
+        <g transform="rotate(-15 60 64)">
+          <line x1="78" y1="36" x2="82" y2="22" stroke="#f3efe8" strokeWidth="2.5" strokeLinecap="round" />
+          <circle className="m-tip" cx="82.6" cy="20" r="3.4" fill="#f3efe8" />
+          <rect x="14" y="36" width="92" height="58" rx="29" fill="#f3efe8" />
         </g>
-        <circle cx="88" cy="88" r="5" fill="#fff" opacity=".35" />
+        <g className="m-eyes" fill="#141212">
+          <rect x="66" y="45" width="7" height="17" rx="3.5" transform="rotate(-22 69.5 53.5)" />
+          <rect x="83" y="40" width="7" height="17" rx="3.5" transform="rotate(-22 86.5 48.5)" />
+        </g>
       </g>
     </svg>
   );

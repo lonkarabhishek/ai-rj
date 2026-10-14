@@ -3,22 +3,22 @@
 @theme {
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
-  --color-accent: #ff8a7a;
-  --color-accent-strong: #7fe0c0;
+  --color-accent: #f3efe8;
+  --color-accent-strong: #f3efe8;
 }
 
 :root { color-scheme: dark; }
 html, body { background: #0a0908; color: #f3efe8; -webkit-font-smoothing: antialiased; }
 body { font-family: var(--font-sans); letter-spacing: -0.005em; }
-::selection { background: #ff8a7a44; }
+::selection { background: #f3efe833; }
 
 /* ambient backdrop */
 .ambient::before {
   content: ""; position: fixed; inset: -20%; z-index: -1; pointer-events: none;
   background:
-    radial-gradient(42% 34% at 18% 8%, #ff8a7a12, transparent 70%),
-    radial-gradient(36% 30% at 88% 34%, #8cc8ff10, transparent 70%),
-    radial-gradient(50% 40% at 50% 105%, #7fe0c00f, transparent 70%);
+    radial-gradient(42% 34% at 18% 8%, #f3efe812, transparent 70%),
+    radial-gradient(36% 30% at 88% 34%, #f3efe810, transparent 70%),
+    radial-gradient(50% 40% at 50% 105%, #f3efe80f, transparent 70%);
   filter: blur(24px);
   animation: aurora 28s ease-in-out infinite alternate;
 }
@@ -62,21 +62,19 @@ body { font-family: var(--font-sans); letter-spacing: -0.005em; }
   box-shadow: inset 0 1px 0 rgb(255 240 220 / .07), inset 0 0 0 1px rgb(255 240 220 / .05);
 }
 .onair-dot { background: #d8cfc4; opacity: .6; }
-.onair-dot.is-live { background: #ff8a7a; opacity: 1; box-shadow: 0 0 10px 2px #ff8a7a88; }
+.onair-dot.is-live { background: #f3efe8; opacity: 1; box-shadow: 0 0 10px 2px #f3efe888; }
 
-/* radio mascot: one flat chunky shape, two blinking eyes */
+/* mascot: one flat pink pill, two slanted capsule eyes */
 .mascot { overflow: visible; shape-rendering: geometricPrecision; }
-.mascot .m-body { transform-origin: 60px 106px; transform-box: view-box; }
-.mascot-idle .m-body { animation: m-float 4.5s ease-in-out infinite; }
-.mascot-live .m-body { animation: m-bob 1.1s ease-in-out infinite alternate; }
-.mascot-talking .m-body { animation: m-breathe 1.6s ease-in-out infinite; }
-.mascot .m-eyes { transform-origin: 55px 65px; transform-box: view-box; transition: transform .09s; }
-.mascot.is-blink .m-eyes { transform: scaleY(.12); }
-.mascot .m-tip { transform-origin: 87px 15px; transform-box: view-box; }
+.mascot .m-body { transform-origin: 60px 64px; transform-box: view-box; }
+.mascot-idle .m-body { animation: m-sway 5s ease-in-out infinite; }
+.mascot-live .m-body, .mascot-talking .m-body { animation: m-bob 1.1s ease-in-out infinite alternate; }
+.mascot .m-eyes { transform-origin: 78px 51px; transform-box: view-box; transition: transform .09s; }
+.mascot.is-blink .m-eyes { transform: scaleY(.1); }
+.mascot .m-tip { transform-origin: center; transform-box: fill-box; }
 .mascot-talking .m-tip { animation: m-pulse .7s ease-in-out infinite; }
-@keyframes m-float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+@keyframes m-sway { 0%,100% { transform: translateY(0) rotate(0deg); } 50% { transform: translateY(-3px) rotate(-2deg); } }
 @keyframes m-bob { from { transform: translateY(0); } to { transform: translateY(-2.5px); } }
-@keyframes m-breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.035); } }
-@keyframes m-pulse { 0%,100% { transform: scale(1); filter: none; } 50% { transform: scale(1.3); filter: drop-shadow(0 0 6px #7fe0c0); } }
+@keyframes m-pulse { 0%,100% { transform: scale(1); filter: none; } 50% { transform: scale(1.5); filter: drop-shadow(0 0 5px #f3efe8); } }
 @media (prefers-reduced-motion: reduce) { .mascot *, .mascot .m-body { animation: none !important; } }
 @media (prefers-reduced-motion: reduce) { .ambient::before, .ambient::after, .onair-orb { animation: none !important; } }
