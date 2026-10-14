@@ -1,29 +1,67 @@
 "use client";
 import type { ListenMode, TrackInfo } from "./prefs";
 
-export async function getToken(): Promise<string | null> {
-  const r = await fetch("/api/spotify/token", { cache: "no-store" });
-  if (!r.ok) return null;
-  return (await r.json()).accessToken ?? null;
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Client-side token cache: avoids hammering /api/spotify/token, refreshes before expiry.
+let cached: { token: string; until: number } | null = null;
+let inflight: Promise<string | null> | null = null;
+
+async function fetchToken(force: boolean): Promise<string | null> {
+  for (let i = 0; i < 3; i++) {
+    try {
+      const r = await fetch(`/api/spotify/token${force ? "?force=1" : ""}`, { cache: "no-store" });
+      if (r.status === 401) { cached = null; return null; }
+      if (!r.ok) throw new Error(String(r.status));
+      const j = await r.json();
+      cached = { token: j.accessToken, until: Math.min(j.expiresAt ?? 0, Date.now() + 45 * 60 * 1000) };
+      return j.accessToken;
+    } catch { await wait(800 * (i + 1)); }
+  }
+  return cached?.token ?? null;
+}
+
+export async function getToken(force = false): Promise<string | null> {
+  if (!force && cached && cached.until > Date.now()) return cached.token;
+  if (!inflight) inflight = fetchToken(force).finally(() => { inflight = null; });
+  return inflight;
 }
 
 export async function getTokenInfo(): Promise<{ accessToken: string; scope: string | null } | null> {
-  const r = await fetch("/api/spotify/token", { cache: "no-store" });
-  if (!r.ok) return null;
-  return r.json();
+  try {
+    const r = await fetch("/api/spotify/token", { cache: "no-store" });
+    if (!r.ok) return null;
+    return r.json();
+  } catch { return null; }
 }
 
+export class SpotifyError extends Error {
+  constructor(public status: number, msg: string) { super(`Spotify ${status}: ${msg}`); }
+}
+
+/** Spotify Web API call with token refresh on 401, Retry-After on 429, and backoff on network/5xx errors. */
 export async function sp<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
-  const token = await getToken();
-  if (!token) throw new Error("Spotify not connected");
-  const r = await fetch(`https://api.spotify.com/v1${path}`, {
-    ...init,
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(init.headers ?? {}) },
-  });
-  if (r.status === 204) return undefined as T;
-  if (!r.ok) throw new Error(`Spotify ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  const text = await r.text();
-  return (text ? JSON.parse(text) : undefined) as T;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const token = await getToken(attempt > 0 && lastErr instanceof SpotifyError && lastErr.status === 401);
+    if (!token) throw new SpotifyError(401, "not connected");
+    let r: Response;
+    try {
+      r = await fetch(`https://api.spotify.com/v1${path}`, {
+        ...init,
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(init.headers ?? {}) },
+      });
+    } catch (e) { lastErr = e; await wait(1000 * 2 ** attempt); continue; }
+    if (r.status === 204 || r.status === 202) return undefined as T;
+    if (r.ok) { const text = await r.text(); return (text ? JSON.parse(text) : undefined) as T; }
+    const body = (await r.text()).slice(0, 200);
+    lastErr = new SpotifyError(r.status, body);
+    if (r.status === 401) continue; // refresh token and retry
+    if (r.status === 429) { await wait(Math.min(30, Number(r.headers.get("Retry-After") ?? 2)) * 1000); continue; }
+    if (r.status >= 500) { await wait(1000 * 2 ** attempt); continue; }
+    throw lastErr; // 400/403/404: caller decides
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -141,13 +179,15 @@ export class Curator {
   }
 
   private async refill() {
-    if (this.round === 0 && this.mode !== "focus") await this.loadBase();
+    const poolsEmpty = !Object.values(this.pools).some((p) => p?.length);
+    if ((this.round === 0 || poolsEmpty) && (this.mode !== "focus" || poolsEmpty && this.round > 1)) await this.loadBase();
     this.round++;
     if (this.mode !== "default") {
       const modeT = await this.modeTracks();
       const batch = this.mode === "focus"
         ? this.take(modeT, 12) // focus: only instrumental-style tracks, no lyrics-heavy favourites
         : [...this.take(modeT, 8), ...this.take(this.pools.top, 2), ...this.take(this.pools.saved, 2)].sort(() => Math.random() - 0.5);
+      if (!batch.length) batch.push(...this.take(this.pools.top, 6), ...this.take(this.pools.saved, 6)); // mode search failed: fall back to favourites
       this.queue.push(...batch);
       if (!batch.length && this.played.size) this.played.clear();
       return;
@@ -165,7 +205,9 @@ export class Curator {
   }
 
   async next(): Promise<TrackInfo | null> {
-    for (let tries = 0; this.queue.length < 3 && tries < 3; tries++) await this.refill();
+    for (let tries = 0; this.queue.length < 3 && tries < 3; tries++) {
+      try { await this.refill(); } catch { await new Promise((r) => setTimeout(r, 1500)); }
+    }
     const t = this.queue.shift() ?? null;
     if (t?.uri) this.played.add(t.uri);
     return t;

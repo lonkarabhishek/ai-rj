@@ -26,10 +26,10 @@ export async function tokenRequest(params: Record<string, string>) {
 }
 
 /** Returns a valid access token, refreshing via the refresh-token cookie when needed. */
-export async function getAccessToken(): Promise<string | null> {
+export async function getAccessToken(force = false): Promise<string | null> {
   const jar = await cookies();
   const at = jar.get("sp_at")?.value;
-  if (at) return at;
+  if (at && !force) return at;
   const rt = jar.get("sp_rt")?.value;
   if (!rt) return null;
   const t = await tokenRequest({ grant_type: "refresh_token", refresh_token: rt });
