@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { isOnboarded, loadPrefs, MODES, type ListenMode, type Prefs, type TrackInfo } from "@/lib/prefs";
+import { isOnboarded, loadPrefs, MODES, savePrefs, type ListenMode, type Prefs, type TrackInfo } from "@/lib/prefs";
 import { Curator, getMe, getToken, getTokenInfo, sp, spotifyBackoffMs, SpotifyError } from "@/lib/spotifyClient";
 import { AllPrefs, SongLangPicker, TalkToggles, usePrefs } from "@/components/prefs";
 import { cx, Spinner } from "@/components/ui";
@@ -752,7 +752,10 @@ function LiveInner() {
     playerRef.current?.activateElement?.(); // must happen inside the tap
     unlockAudio();
     const p = effPrefs();
-    if (!p.voiceId) { window.location.href = "/welcome?step=voice"; return; }
+    if (!p.voiceId) { // skipped the voice step: use the default voice for their language instead of bouncing them back
+      const v = p.language === "hindi" ? "azure:hi-IN-SwaraNeural" : p.language === "marathi" ? "azure:mr-IN-AarohiNeural" : "azure:en-IN-NeerjaNeural";
+      savePrefs({ ...loadPrefs(), voiceId: v }); up("voiceId", v); p.voiceId = v;
+    }
     const sid = ++sessionRef.current;
     chanRef.current?.postMessage({ type: "live", tab: tabId.current });
     requestWake();
@@ -787,7 +790,7 @@ function LiveInner() {
     let openerDue = false;
     if (next) {
       // Music is ready: give the intro a short grace period, otherwise start the song and open the show at the next break.
-      const ready = await Promise.race([introP.then(() => true), sleep(1500).then(() => false)]);
+      const ready = await Promise.race([introP.then(() => true), sleep(1000).then(() => false)]);
       if (!ready) { pending = null; openerDue = true; log("intro not ready: music first, opener at the next break"); }
     } else bootStep("rj", "Warming up the RJ…");
     times.push(`first sound ${((performance.now() - t0) / 1000).toFixed(1)}s`); setDiag({ timings: times.join(" · ") });
