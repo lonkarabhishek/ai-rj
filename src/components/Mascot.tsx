@@ -18,6 +18,8 @@ export function Mascot({ state = "idle", className, getLevel }: { state?: State;
   const voiceRef = useRef<SVGGElement>(null);
   const eyesRef = useRef<SVGGElement>(null);
   const tipRef = useRef<SVGCircleElement>(null);
+  const smileRef = useRef<SVGPathElement>(null);
+  const mouthRef = useRef<SVGEllipseElement>(null);
   const stateRef = useRef(state); stateRef.current = state;
   const levelRef = useRef(getLevel); levelRef.current = getLevel;
   const [hover, setHover] = useState(false);
@@ -93,6 +95,14 @@ export function Mascot({ state = "idle", className, getLevel }: { state?: State;
         bx = b.dx * sp * 40; by = b.dy * sp * 40;
         if (b.giggle) rot = Math.sin(bt * 30) * 7 * Math.exp(-bt * 4);
       }
+      // mouth: closed smile at rest, small oval that opens with the voice, a little "o" on boop
+      const open = Math.min(1, Math.max(lvl * 1.1, bt < 0.7 ? (1 - bt / 0.7) * 0.8 : 0));
+      if (mouthRef.current && smileRef.current) {
+        const show = open > 0.08;
+        mouthRef.current.setAttribute("ry", (0.8 + open * 2.6).toFixed(2));
+        mouthRef.current.setAttribute("rx", (2.4 + open * 0.8).toFixed(2));
+        mouthRef.current.style.opacity = show ? "1" : "0"; smileRef.current.style.opacity = show ? "0" : "1";
+      }
       voiceRef.current?.setAttribute("transform", `translate(${bx.toFixed(2)} ${by.toFixed(2)}) rotate(${rot.toFixed(2)} 60 64) translate(60 94) scale(${sx.toFixed(4)} ${sy.toFixed(4)}) translate(-60 -94)`);
       eyesRef.current?.setAttribute("transform", `translate(${ex.toFixed(2)} ${ey.toFixed(2)})`);
       if (tipRef.current) {
@@ -115,6 +125,10 @@ export function Mascot({ state = "idle", className, getLevel }: { state?: State;
             <line x1="78" y1="36" x2="82" y2="22" stroke="#f3efe8" strokeWidth="2.5" strokeLinecap="round" />
             <circle ref={tipRef} className="m-tip" cx="82.6" cy="20" r="3.4" fill="#f3efe8" />
             <rect x="14" y="36" width="92" height="58" rx="29" fill="#f3efe8" />
+          </g>
+          <g transform="rotate(-15 79 66)" fill="#141212">
+            <path ref={smileRef} d="M75.5 65.2 Q79 68.6 82.5 65.2" stroke="#141212" strokeWidth="2.4" strokeLinecap="round" fill="none" />
+            <ellipse ref={mouthRef} cx="79" cy="66.4" rx="2.4" ry="0.8" style={{ opacity: 0 }} />
           </g>
           <g ref={eyesRef}>
             <g className="m-eyes" fill="#141212">
