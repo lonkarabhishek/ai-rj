@@ -64,17 +64,12 @@ body { font-family: var(--font-sans); letter-spacing: -0.005em; }
 .onair-dot { background: #d8cfc4; opacity: .6; }
 .onair-dot.is-live { background: #f3efe8; opacity: 1; box-shadow: 0 0 10px 2px #f3efe888; }
 
-/* mascot: one flat pink pill, two slanted capsule eyes */
+/* mascot: one flat pill, two slanted capsule eyes. Calm sway always; voice/gaze driven from JS. */
 .mascot { overflow: visible; shape-rendering: geometricPrecision; }
-.mascot .m-body { transform-origin: 60px 64px; transform-box: view-box; }
-.mascot-idle .m-body { animation: m-sway 5s ease-in-out infinite; }
-.mascot-live .m-body, .mascot-talking .m-body { animation: m-bob 1.1s ease-in-out infinite alternate; }
-.mascot .m-eyes { transform-origin: 78px 51px; transform-box: view-box; transition: transform .09s; }
+.mascot .m-body { transform-origin: 60px 64px; transform-box: view-box; animation: m-sway 6.5s ease-in-out infinite; }
+.mascot .m-eyes { transform-origin: 78px 51px; transform-box: view-box; transition: transform .12s ease; }
 .mascot.is-blink .m-eyes { transform: scaleY(.1); }
-.mascot .m-tip { transform-origin: center; transform-box: fill-box; }
-.mascot-talking .m-tip { animation: m-pulse .7s ease-in-out infinite; }
-@keyframes m-sway { 0%,100% { transform: translateY(0) rotate(0deg); } 50% { transform: translateY(-3px) rotate(-2deg); } }
-@keyframes m-bob { from { transform: translateY(0); } to { transform: translateY(-2.5px); } }
-@keyframes m-pulse { 0%,100% { transform: scale(1); filter: none; } 50% { transform: scale(1.5); filter: drop-shadow(0 0 5px #f3efe8); } }
-@media (prefers-reduced-motion: reduce) { .mascot *, .mascot .m-body { animation: none !important; } }
+.mascot.is-happy .m-eyes { transform: scaleY(.45) translateY(-1px); transition-duration: .25s; }
+@keyframes m-sway { 0%,100% { transform: translateY(0) rotate(0deg); } 50% { transform: translateY(-2.5px) rotate(-1.5deg); } }
+@media (prefers-reduced-motion: reduce) { .mascot *, .mascot .m-body { animation: none !important; transition: none !important; } }
 @media (prefers-reduced-motion: reduce) { .ambient::before, .ambient::after, .onair-orb { animation: none !important; } }

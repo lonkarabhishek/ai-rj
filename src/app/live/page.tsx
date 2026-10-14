@@ -216,6 +216,29 @@ function LiveInner() {
     const from = (await pl.getVolume().catch(() => SONG_VOL)) as number, steps = 10;
     for (let i = 1; i <= steps; i++) { await pl.setVolume(Math.max(0.0001, from + (to - from) * (i / steps))).catch(() => {}); await sleep(ms / steps); }
   }
+  // Voice amplitude for the mascot. Skipped on iOS/Safari: routing the element through Web Audio there can mute it if the context suspends.
+  const analyserRef = useRef<{ an: AnalyserNode; buf: Uint8Array<ArrayBuffer> } | null>(null);
+  const analyserTriedRef = useRef(false);
+  function attachAnalyser() {
+    if (analyserTriedRef.current || !voiceElRef.current) return;
+    const ua = navigator.userAgent;
+    if (/iPhone|iPad|iPod/.test(ua) || (/Safari/.test(ua) && !/Chrome|Chromium|Edg|Firefox/.test(ua)) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) { analyserTriedRef.current = true; return; }
+    try {
+      const c = ac(); if (c.state !== "running") return; // try again on a later clip
+      analyserTriedRef.current = true;
+      const src = c.createMediaElementSource(voiceElRef.current), an = c.createAnalyser();
+      an.fftSize = 512; an.smoothingTimeConstant = 0.5; src.connect(an); an.connect(c.destination);
+      analyserRef.current = { an, buf: new Uint8Array(new ArrayBuffer(an.fftSize)) };
+    } catch (e) { log(`voice analyser unavailable: ${e}`); }
+  }
+  const voiceLevel = useCallback((): number | null => {
+    const x = analyserRef.current, el = voiceElRef.current;
+    if (!x || !el || el.paused) return null; // browser TTS or no analyser: mascot uses its rhythmic fallback
+    x.an.getByteTimeDomainData(x.buf);
+    let sum = 0; for (let i = 0; i < x.buf.length; i++) { const v = (x.buf[i] - 128) / 128; sum += v * v; }
+    return Math.min(1, Math.sqrt(sum / x.buf.length) * 6);
+  }, []);
+
   /** Must run inside a user tap: unlocks the shared audio element, Web Audio and speech synthesis (iOS/Safari). */
   function unlockAudio() {
     try {
@@ -244,6 +267,7 @@ function LiveInner() {
       if (!a) { a = new Audio(); (a as any).playsInline = true; a.setAttribute("playsinline", ""); voiceElRef.current = a; }
       a.onended = a.onerror = a.ontimeupdate = null;
       a.pause(); a.src = url; audioRef.current = a; a.volume = opts.fadeIn ? 0 : 1;
+      if (opts.voice) attachAnalyser();
       if (opts.voice) voiceClockRef.current = () => [a.currentTime, Number.isFinite(a.duration) ? a.duration : 0];
       let done = false;
       const finish = async (fade = false) => {
@@ -696,7 +720,7 @@ function LiveInner() {
             <div className={cx("aspect-square w-[min(64vw,280px,30svh)] transition-transform", art && "overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]", " duration-700", speaking || phase === "rj" ? "scale-[0.72]" : phase === "song" ? "scale-100" : "scale-[0.94]")}>
               {art ? <img key={art} src={art} alt="" className="fade-up h-full w-full object-cover" /> : (
                 <div className="relative flex h-full w-full items-center justify-center">
-                  <Mascot state={phase === "rj" || speaking ? "talking" : live ? "live" : "idle"} className="w-[78%]" />
+                  <Mascot state={phase === "rj" || speaking ? "talking" : live ? "live" : "idle"} className="w-[78%]" getLevel={voiceLevel} />
                   <span className="absolute bottom-1 text-[10px] font-medium uppercase tracking-[0.28em] text-[#f3efe8]/45">{phase === "rj" ? "On air" : live ? "Live" : "MyRJ FM"}</span>
                   {(phase === "tuning" || phase === "recovering") && <Spinner className="absolute h-6 w-6" />}
                 </div>
