@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AccountSync } from "@/components/account";
@@ -18,13 +18,15 @@ export const metadata: Metadata = {
   description: "Your own AI Radio Jockey. Speaks your language, plays your music, shares your news.",
 };
 
+export const viewport: Viewport = { width: "device-width", initialScale: 1, viewportFit: "cover", themeColor: "#060607" };
+
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col"><AccountSync />{children}</body>
+      <body className="min-h-full flex flex-col overflow-x-hidden"><AccountSync />{children}</body>
     </html>
   );
 }

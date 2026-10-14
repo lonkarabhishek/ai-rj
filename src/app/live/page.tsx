@@ -615,9 +615,9 @@ function LiveInner() {
   const art = phase === "song" || phase === "waiting" ? now?.image : null;
 
   return (
-    <main className="ambient relative min-h-dvh w-full overflow-hidden" onClick={() => notice?.startsWith("Tap anywhere") && setNotice(null)}>
+    <main className="ambient relative min-h-dvh w-full overflow-x-hidden" onClick={() => notice?.startsWith("Tap anywhere") && setNotice(null)}>
       {art && <img src={art} alt="" className="pointer-events-none fixed inset-0 -z-10 h-full w-full scale-150 object-cover opacity-30 blur-[80px] transition-opacity duration-1000" />}
-      <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-5">
+      <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-[calc(max(0.75rem,env(safe-area-inset-bottom))+5.75rem)] pt-[max(1rem,env(safe-area-inset-top))] sm:px-6">
         {/* top bar */}
         <header className="flex h-10 items-center justify-between">
           <Link href="/settings" className="flex items-center gap-2 text-[15px] font-semibold tracking-tight">
@@ -631,21 +631,13 @@ function LiveInner() {
           </div>
         </header>
 
-        {/* modes */}
-        <div className="glass mt-6 grid grid-cols-4 rounded-2xl p-1">
-          {MODES.map((x) => (
-            <button key={x.id} onClick={() => changeMode(x.id)} className={cx("rounded-xl py-2.5 text-xs transition", listenMode === x.id ? "bg-white text-black font-medium" : "text-zinc-400 hover:text-white")}>
-              <div className="text-base leading-none">{x.emoji}</div><div className="mt-1">{x.label}</div>
-            </button>
-          ))}
-        </div>
-
         <VibeInput value={prefs.vibe ?? ""} focus={listenMode === "focus"} onCommit={commitVibe} />
+        <ModeDock value={listenMode} onChange={changeMode} />
 
         {/* stage */}
-        <section className="flex flex-1 flex-col items-center justify-center py-8 text-center">
+        <section className="flex min-h-0 flex-1 flex-col items-center justify-center py-4 text-center sm:py-8">
           <div className="relative">
-            <div className={cx("aspect-square w-[min(68vw,280px)] overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)] transition-transform duration-700", speaking || phase === "rj" ? "scale-[0.72]" : phase === "song" ? "scale-100" : "scale-[0.94]")}>
+            <div className={cx("aspect-square w-[min(64vw,280px,30svh)] overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)] transition-transform duration-700", speaking || phase === "rj" ? "scale-[0.72]" : phase === "song" ? "scale-100" : "scale-[0.94]")}>
               {art ? <img key={art} src={art} alt="" className="fade-up h-full w-full object-cover" /> : (
                 <div className="relative flex h-full w-full items-center justify-center bg-gradient-to-br from-fuchsia-500/90 via-violet-600/90 to-indigo-700/90">
                   <div className={cx("h-24 w-24 rounded-full bg-white/15 backdrop-blur", live ? "breathe" : "")} />
@@ -662,18 +654,18 @@ function LiveInner() {
             )}
           </div>
 
-          <div className="mt-10 min-h-[92px] w-full">
+          <div className="mt-6 min-h-[84px] w-full sm:mt-10">
             {(phase === "rj" || speaking) && script ? (
               <Lyrics key={script} text={script} clock={clock} />
             ) : phase === "song" || (phase === "waiting" && now) ? (
               <div key={now?.uri} className="fade-up">
-                <h1 className="truncate text-[26px] font-semibold tracking-tight">{now?.name}</h1>
+                <h1 className="truncate text-[22px] font-semibold tracking-tight sm:text-[26px]">{now?.name}</h1>
                 <p className="mt-1 truncate text-[15px] text-zinc-400">{now?.artists}</p>
               </div>
             ) : (
               <div className="fade-up">
-                <h1 className="text-[26px] font-semibold tracking-tight">{live ? rjName : `${rjName} is ready`}</h1>
-                <p className="mt-1 text-[15px] text-zinc-500">{live ? "" : `${MODES.find((m) => m.id === listenMode)!.blurb}. One tap and it never stops.`}</p>
+                <h1 className="text-[22px] font-semibold tracking-tight sm:text-[26px]">{live ? rjName : `${rjName} is ready`}</h1>
+                <p className="mt-1 text-[14px] text-zinc-500 sm:text-[15px]">{live ? "" : `${MODES.find((m) => m.id === listenMode)!.blurb}. One tap and it never stops.`}</p>
               </div>
             )}
           </div>
@@ -700,18 +692,18 @@ function LiveInner() {
 
         <div className="flex items-center gap-3">
           {!live ? (
-            <button onClick={goLive} className="h-16 w-full rounded-full bg-white text-[17px] font-semibold text-black shadow-[0_10px_40px_-10px_rgba(255,255,255,0.35)] transition active:scale-[0.97]">Go Live</button>
+            <button onClick={goLive} className="h-14 w-full rounded-full bg-white text-[17px] sm:h-16 font-semibold text-black shadow-[0_10px_40px_-10px_rgba(255,255,255,0.35)] transition active:scale-[0.97]">Go Live</button>
           ) : (
             <>
-              <button onClick={() => stop("Off air. Tap Go Live to tune back in.")} className="glass flex h-16 w-16 items-center justify-center rounded-full active:scale-95" aria-label="Stop">
+              <button onClick={() => stop("Off air. Tap Go Live to tune back in.")} className="glass flex h-14 w-14 shrink-0 items-center sm:h-16 sm:w-16 justify-center rounded-full active:scale-95" aria-label="Stop">
                 <span className="h-4 w-4 rounded-[3px] bg-white" />
               </button>
-              <button onClick={() => skipRef.current()} disabled={phase === "tuning" || phase === "recovering"} className="h-16 flex-1 rounded-full bg-white text-[16px] font-semibold text-black transition active:scale-[0.97] disabled:opacity-40">Next</button>
+              <button onClick={() => skipRef.current()} disabled={phase === "tuning" || phase === "recovering"} className="h-14 flex-1 rounded-full bg-white text-[16px] sm:h-16 font-semibold text-black transition active:scale-[0.97] disabled:opacity-40">Next</button>
             </>
           )}
         </div>
 
-        <button onClick={() => setShowDiag((v) => !v)} className="mt-4 text-[11px] text-zinc-600 hover:text-zinc-400">
+        <button onClick={() => setShowDiag((v) => !v)} className="mt-3 text-[11px] text-zinc-600 hover:text-zinc-400">
           {diag.error && live ? "● " : ""}Playback details
         </button>
         {showDiag && (
@@ -734,7 +726,7 @@ function LiveInner() {
       {drawer && (
         <div className="fixed inset-0 z-50">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm fade-up" onClick={() => setDrawer(false)} />
-          <div className="sheet-up absolute inset-x-0 bottom-0 mx-auto flex max-h-[88dvh] max-w-xl flex-col rounded-t-[28px] border-t border-white/10 bg-[#0d0d10]/95 backdrop-blur-xl">
+          <div className="sheet-up absolute inset-x-0 bottom-0 mx-auto flex max-h-[88dvh] max-w-xl flex-col pb-[env(safe-area-inset-bottom)] rounded-t-[28px] border-t border-white/10 bg-[#0d0d10]/95 backdrop-blur-xl">
             <div className="flex items-center justify-between px-6 pb-2 pt-4">
               <div><div className="mx-auto mb-3 h-1 w-10 rounded-full bg-white/15" /><h2 className="text-lg font-semibold">Your RJ</h2><p className="text-xs text-zinc-500">Changes apply from the next break.</p></div>
               <button onClick={() => setDrawer(false)} className="glass h-9 rounded-full px-4 text-sm">Done</button>
@@ -757,13 +749,39 @@ function VibeInput({ value, focus, onCommit }: { value: string; focus: boolean; 
   useEffect(() => setV(value), [value]);
   return (
     <form onSubmit={(e) => { e.preventDefault(); (e.currentTarget.elements.namedItem("vibe") as HTMLInputElement)?.blur(); }}
-      className="glass mt-3 flex items-center gap-2 rounded-2xl px-4">
+      className="glass mt-4 flex items-center gap-2 rounded-2xl px-4">
       <span className="text-xs text-zinc-500">✦</span>
       <input name="vibe" value={v} maxLength={VIBE_MAX} onChange={(e) => setV(e.target.value)} onBlur={() => onCommit(v)}
         placeholder={focus ? "lofi bollywood, rainy piano…" : "90s bollywood pls"} aria-label="Vibe request"
-        className="h-11 min-w-0 flex-1 bg-transparent text-sm text-white placeholder:text-zinc-600 focus:outline-none" />
+        className="h-11 min-w-0 flex-1 bg-transparent text-base sm:text-sm text-white placeholder:text-zinc-600 focus:outline-none" />
       {v && <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { setV(""); onCommit(""); }} className="text-xs text-zinc-500 hover:text-white" aria-label="Clear vibe">✕</button>}
       {v.length > 70 && <span className="text-[10px] tabular-nums text-zinc-600">{VIBE_MAX - v.length}</span>}
     </form>
+  );
+}
+
+const DOCK_ICONS: Record<ListenMode, React.ReactNode> = {
+  default: <path d="M4 10h16v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-9Zm3-4 10-3M8 15h.01M14 13.5h3M14 16.5h3" />,
+  gym: <path d="M6.5 6.5v11M17.5 6.5v11M3.5 9v6M20.5 9v6M6.5 12h11" />,
+  drive: <path d="M5 16V11l2-5h10l2 5v5M5 16h14M5 16v2M19 16v2M7.5 13h.01M16.5 13h.01" />,
+  focus: <path d="M4 15v-3a8 8 0 0 1 16 0v3M4 15a2 2 0 0 0 2 2h1v-5H6a2 2 0 0 0-2 2Zm16 0a2 2 0 0 1-2 2h-1v-5h1a2 2 0 0 1 2 2Z" />,
+};
+/** Floating liquid-glass mode dock (iOS 26 tab bar style) with a sliding lens. */
+function ModeDock({ value, onChange }: { value: ListenMode; onChange: (m: ListenMode) => void }) {
+  const idx = Math.max(0, MODES.findIndex((m) => m.id === value));
+  return (
+    <nav aria-label="Listening mode" className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+      <div className="liquid-glass pointer-events-auto relative grid w-full max-w-[380px] grid-cols-4 rounded-full p-1.5">
+        <span aria-hidden className="liquid-lens absolute bottom-1.5 left-1.5 top-1.5 rounded-full"
+          style={{ width: "calc((100% - 0.75rem) / 4)", transform: `translateX(${idx * 100}%)` }} />
+        {MODES.map((m) => (
+          <button key={m.id} onClick={() => { onChange(m.id); navigator.vibrate?.(8); }} aria-pressed={value === m.id}
+            className={cx("relative z-10 flex h-[52px] flex-col items-center justify-center gap-0.5 rounded-full text-[10.5px] font-medium transition-[color,transform] duration-200 active:scale-[0.9]", value === m.id ? "text-white" : "text-zinc-400 hover:text-zinc-200")}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{DOCK_ICONS[m.id]}</svg>
+            {m.label}
+          </button>
+        ))}
+      </div>
+    </nav>
   );
 }

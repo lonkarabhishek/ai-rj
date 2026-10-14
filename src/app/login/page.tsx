@@ -26,9 +26,9 @@ function LoginInner() {
   }
 
   return (
-    <main className="ambient mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center px-6">
-      <Link href="/live" className="absolute left-6 top-8 text-sm text-zinc-500 hover:text-white">← Radio</Link>
-      <h1 className="fade-up text-4xl font-semibold tracking-tight">Sign in</h1>
+    <main className="ambient mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center px-5 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[calc(max(2rem,env(safe-area-inset-top))+2.5rem)] sm:px-6">
+      <Link href="/live" className="absolute left-5 top-[max(2rem,env(safe-area-inset-top))] sm:left-6 text-sm text-zinc-500 hover:text-white">← Radio</Link>
+      <h1 className="fade-up text-3xl font-semibold sm:text-4xl tracking-tight">Sign in</h1>
       <p className="fade-up mt-3 text-zinc-400">Keep your RJ, voice and music in sync on every device. Your current setup comes with you.</p>
       {!sb ? <p className="mt-8 text-sm text-amber-300">Accounts aren&apos;t configured on this server yet.</p> : state === "sent" ? (
         <div className="glass fade-up mt-10 rounded-2xl p-5">

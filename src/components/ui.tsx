@@ -39,7 +39,7 @@ export function Section({ title, hint, children }: { title: string; hint?: strin
   );
 }
 
-export const inputCls = "w-full h-12 rounded-2xl bg-white/[0.04] border border-white/10 px-4 text-[15px] placeholder:text-zinc-600 outline-none focus:border-white/30 transition";
+export const inputCls = "w-full h-12 rounded-2xl bg-white/[0.04] border border-white/10 px-4 text-base sm:text-[15px] placeholder:text-zinc-600 outline-none focus:border-white/30 transition";
 
 export function Spinner({ className }: { className?: string }) {
   return <span className={cx("inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-white", className)} />;

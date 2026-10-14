@@ -34,7 +34,7 @@ function Flow() {
   if (!loaded) return null;
 
   return (
-    <main className="ambient mx-auto flex min-h-dvh w-full max-w-lg flex-col px-6 pb-8 pt-6">
+    <main className="ambient mx-auto flex min-h-dvh w-full max-w-lg flex-col px-5 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[max(1.5rem,env(safe-area-inset-top))] sm:px-6">
       <div className="flex items-center gap-1.5">
         {STEPS.map((s, j) => <span key={s} className={cx("h-1 flex-1 rounded-full transition-colors duration-500", j <= i ? "bg-white" : "bg-white/10")} />)}
       </div>
@@ -44,9 +44,9 @@ function Flow() {
       </div>
 
       <div key={step} className="fade-up flex flex-1 flex-col">
-        <div className={cx(step === "welcome" ? "mt-[18vh]" : "mt-6", "mb-8")}>
+        <div className={cx(step === "welcome" ? "mt-[8svh] sm:mt-[18vh]" : "mt-6", "mb-8")}>
           {step === "welcome" && <div className="breathe mb-8 h-16 w-16 rounded-2xl bg-gradient-to-br from-fuchsia-500 to-violet-600 shadow-[0_10px_40px_-10px] shadow-fuchsia-500/60" />}
-          <h1 className="whitespace-pre-line text-[32px] font-semibold leading-[1.1] tracking-tight">{COPY[step].title}</h1>
+          <h1 className="whitespace-pre-line text-[28px] font-semibold sm:text-[32px] leading-[1.1] tracking-tight">{COPY[step].title}</h1>
           <p className="mt-3 text-[15px] leading-relaxed text-zinc-400">{COPY[step].sub}</p>
         </div>
         <div className="flex-1">
@@ -69,7 +69,7 @@ function Flow() {
         </div>
       </div>
 
-      <Button variant={step === "mode" ? "light" : "primary"} className="mt-8 h-14 w-full" onClick={next} disabled={!canNext}>
+      <Button variant={step === "mode" ? "light" : "primary"} className="sticky bottom-[max(1rem,env(safe-area-inset-bottom))] mt-8 h-14 w-full shrink-0" onClick={next} disabled={!canNext}>
         {step === "welcome" ? "Let's go" : step === "mode" ? "Go Live" : "Continue"}
       </Button>
       {step === "welcome" && process.env.NEXT_PUBLIC_SUPABASE_URL && (
