@@ -31,3 +31,11 @@ Early scaffolding. Waiting on API keys to wire up live features.
 - [ ] RJ script engine
 - [ ] Music + voice mixing player
 - [ ] Public shareable version on Vercel
+
+## Single-user MVP (no login)
+
+- `/settings`: RJ name, ElevenLabs voice, energy, language, humor, news topics, Spotify connect, saved non-Spotify playlist links. Stored in localStorage.
+- `/live`: Go Live. Before each song the RJ speaks a short segment (intro of next track, a joke, 1-2 Google News headlines on your topics) via ElevenLabs `eleven_multilingual_v2`, then the song plays via the Spotify Web Playback SDK (Premium) or a 30s preview / "Open in Spotify" fallback.
+- Scripts: template-based by default; set `OPENAI_API_KEY` (+ optional `LLM_BASE_URL`, `LLM_MODEL`) to use an LLM.
+
+Run locally: `npm install && npm run dev -- -H 127.0.0.1`, then open http://127.0.0.1:3000 (use 127.0.0.1, not localhost, for Spotify login).
