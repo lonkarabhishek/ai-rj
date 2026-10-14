@@ -16,6 +16,7 @@ export interface Prefs {
   onboarded: boolean;
   tasteSeeds: TrackInfo[]; // songs imported from screenshots/links/lists, matched on Spotify
   defaultMode: ListenMode;
+  vibe: string; // free-text request, max 100 chars, e.g. "90s bollywood pls"
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -31,7 +32,9 @@ export const DEFAULT_PREFS: Prefs = {
   onboarded: false,
   tasteSeeds: [],
   defaultMode: "default",
+  vibe: "",
 };
+export const VIBE_MAX = 100;
 
 export const LANGUAGES: { id: Language; label: string }[] = [
   { id: "english", label: "English" },

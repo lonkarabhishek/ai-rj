@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 import { useEffect, useRef, useState } from "react";
-import { DEFAULT_PREFS, ENERGIES, HUMORS, LANGUAGES, MODES, loadPrefs, savePrefs, type Prefs, type TrackInfo } from "@/lib/prefs";
+import { VIBE_MAX, DEFAULT_PREFS, ENERGIES, HUMORS, LANGUAGES, MODES, loadPrefs, savePrefs, type Prefs, type TrackInfo } from "@/lib/prefs";
 import { getMe } from "@/lib/spotifyClient";
 import { Button, Chip, Section, Spinner, cx, inputCls } from "./ui";
 import { AccountPanel } from "./account";
@@ -231,6 +231,7 @@ export function AllPrefs({ p, up, compact, returnTo }: { p: Prefs; up: Up; compa
       <Section title="Energy"><EnergyPicker p={p} up={up} /></Section>
       <Section title="Humor" hint="From squeaky clean to pitch dark."><HumorPicker p={p} up={up} /></Section>
       <Section title="News" hint="Only these topics make it on air."><TopicsEditor p={p} up={up} /></Section>
+      <Section title="Vibe request" hint="Tell your RJ what you're in the mood for. Focus keeps it instrumental."><VibeField p={p} up={up} /></Section>
       <Section title="Default mode"><ModePicker value={p.defaultMode} onChange={(m) => up("defaultMode", m)} /></Section>
       <Section title="Spotify"><SpotifyConnect returnTo={returnTo} /></Section>
       <Section title="Add your music from anywhere" hint="Screenshots from YouTube Music, Apple Music, JioSaavn, a playlist link, or a typed list. MyRJ finds them on Spotify and leans your radio towards them."><MusicImport p={p} up={up} /></Section>
@@ -359,6 +360,16 @@ export function MusicImport({ p, up }: { p: Prefs; up: Up }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+export function VibeField({ p, up }: { p: Prefs; up: Up }) {
+  const v = p.vibe ?? "";
+  return (
+    <div className="relative">
+      <input className={inputCls} value={v} maxLength={VIBE_MAX} placeholder="90s bollywood pls" onChange={(e) => up("vibe", e.target.value.slice(0, VIBE_MAX))} />
+      <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-[11px] tabular-nums text-zinc-600">{v.length}/{VIBE_MAX}</span>
     </div>
   );
 }

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { isOnboarded, loadPrefs, MODES, type ListenMode, type Prefs, type TrackInfo } from "@/lib/prefs";
+import { isOnboarded, loadPrefs, MODES, VIBE_MAX, type ListenMode, type Prefs, type TrackInfo } from "@/lib/prefs";
 import { Curator, getMe, getToken, getTokenInfo, sp, SpotifyError } from "@/lib/spotifyClient";
 import { AllPrefs, usePrefs } from "@/components/prefs";
 import { cx, Spinner } from "@/components/ui";
@@ -15,7 +15,7 @@ type Out = "sdk" | "connect" | "preview" | "none";
 type Phase = "idle" | "tuning" | "rj" | "song" | "waiting" | "recovering";
 interface Diag { account?: string; product?: string; scopes?: string; sdk?: string; device?: string; output?: string; error?: string; log?: string[] }
 type BreakKind = "none" | "stinger" | "full" | "switch";
-interface Plan { kind: BreakKind; withNews?: boolean; withJoke?: boolean }
+interface Plan { kind: BreakKind; withNews?: boolean; withJoke?: boolean; vibeChanged?: boolean }
 interface Segment { script: string; audioUrl: string | null; lang: string; kind: BreakKind }
 
 const NEEDED = ["streaming", "user-modify-playback-state", "user-read-playback-state"];
@@ -72,6 +72,7 @@ function LiveInner() {
   const sinceTalkRef = useRef(0);
   const sinceJokeRef = useRef(0);
   const switchRef = useRef<ListenMode | null>(null);
+  const vibeAckRef = useRef(false);
   const diagRef = useRef<Diag>({ log: [] });
   const wakeRef = useRef<any>(null);
   const chanRef = useRef<BroadcastChannel | null>(null);
@@ -146,11 +147,24 @@ function LiveInner() {
     try { wakeRef.current = await (navigator as any).wakeLock?.request("screen"); } catch { /* not supported */ }
   }
 
+  /** Vibe request committed (Enter/blur). Live: re-steer the stream after this song and let the RJ nod to it. */
+  function commitVibe(v: string) {
+    v = v.replace(/\s+/g, " ").trim().slice(0, VIBE_MAX);
+    if (v === (loadPrefs().vibe ?? "").trim()) return;
+    up("vibe", v);
+    if (phaseRef.current !== "idle" && outRef.current !== "none") {
+      curatorRef.current = new Curator(modeRef.current, loadPrefs().tasteSeeds ?? [], v);
+      vibeAckRef.current = true; switchRef.current = modeRef.current;
+      setNotice(v ? `Vibe set: ${v}. Kicks in after this song.` : "Vibe cleared. Back to your mix after this song.");
+      setTimeout(() => setNotice(null), 3500);
+    }
+  }
+
   function changeMode(m: ListenMode) {
     if (m === modeRef.current) return;
     setListenMode(m); modeRef.current = m;
     if (phaseRef.current !== "idle") {
-      if (outRef.current !== "none") curatorRef.current = new Curator(m, loadPrefs().tasteSeeds ?? []);
+      if (outRef.current !== "none") curatorRef.current = new Curator(m, loadPrefs().tasteSeeds ?? [], loadPrefs().vibe ?? "");
       switchRef.current = m;
       setNotice(`Switching to ${MODES.find((x) => x.id === m)!.label}…`);
       setTimeout(() => setNotice(null), 3000);
@@ -284,7 +298,7 @@ function LiveInner() {
     try {
       const seg = await withTimeout(fetch("/api/segment", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prefs: p, next, prev, index, mode: modeRef.current, recent: recentRef.current.slice(-4), hour: new Date().getHours(), kind: plan.kind, withNews: !!plan.withNews, withJoke: !!plan.withJoke }),
+        body: JSON.stringify({ prefs: p, next, prev, index, mode: modeRef.current, recent: recentRef.current.slice(-4), hour: new Date().getHours(), kind: plan.kind, withNews: !!plan.withNews, withJoke: !!plan.withJoke, vibeChanged: !!plan.vibeChanged }),
       }).then((r) => { if (!r.ok) throw new Error(`segment ${r.status}`); return r.json(); }), 20000, "segment");
       if (!seg.script) { log(`RJ chose silence (${plan.kind})`); return null; }
       recentRef.current.push(seg.script);
@@ -507,7 +521,7 @@ function LiveInner() {
     setPhase("tuning"); setStatus("Tuning in…");
     outRef.current = await setupSpotify(sid);
     if (!alive(sid)) return;
-    curatorRef.current = outRef.current !== "none" ? new Curator(modeRef.current, loadPrefs().tasteSeeds ?? []) : null;
+    curatorRef.current = outRef.current !== "none" ? new Curator(modeRef.current, loadPrefs().tasteSeeds ?? [], loadPrefs().vibe ?? "") : null;
     const nextTrack = async (): Promise<TrackInfo | null> => {
       const c = curatorRef.current; if (!c) return null;
       for (let i = 0; i < 3; i++) { const t = await c.next().catch(() => null); if (t) return t; await sleep(3000); }
@@ -536,8 +550,9 @@ function LiveInner() {
         // Mode switched mid-stream: fresh track from the new mode + a short transition line, right now.
         if (switchRef.current) {
           switchRef.current = null;
+          const vibeChanged = vibeAckRef.current; vibeAckRef.current = false;
           next = await nextTrack(); setUpNext(next);
-          const sw = await buildSegment(effPrefs(), next, prev, i, { kind: "switch" });
+          const sw = await buildSegment(effPrefs(), next, prev, i, { kind: "switch", vibeChanged });
           if (!alive(sid)) break;
           if (sw) await speak(sw);
           pending = null;
@@ -560,7 +575,7 @@ function LiveInner() {
           setPhase("waiting");
           setStatus(outRef.current === "none" ? "Connect Spotify for music. Your RJ will keep you company." : "Finding more music…");
           await sleep(outRef.current === "none" ? 45000 : 8000);
-          if (outRef.current !== "none" && !curatorRef.current) curatorRef.current = new Curator(modeRef.current, loadPrefs().tasteSeeds ?? []);
+          if (outRef.current !== "none" && !curatorRef.current) curatorRef.current = new Curator(modeRef.current, loadPrefs().tasteSeeds ?? [], loadPrefs().vibe ?? "");
           next = await nextTrack(); setUpNext(next);
           pending = outRef.current === "none" ? buildSegment(effPrefs(), null, prev, i + 1, { kind: "full", withJoke: true }) : null;
           continue;
@@ -624,6 +639,8 @@ function LiveInner() {
             </button>
           ))}
         </div>
+
+        <VibeInput value={prefs.vibe ?? ""} focus={listenMode === "focus"} onCommit={commitVibe} />
 
         {/* stage */}
         <section className="flex flex-1 flex-col items-center justify-center py-8 text-center">
@@ -732,4 +749,21 @@ function LiveInner() {
 
 export default function Live() {
   return <Suspense><LiveInner /></Suspense>;
+}
+
+/** One-line, 100-char "what are you in the mood for" box. Commits on Enter / blur. */
+function VibeInput({ value, focus, onCommit }: { value: string; focus: boolean; onCommit: (v: string) => void }) {
+  const [v, setV] = useState(value);
+  useEffect(() => setV(value), [value]);
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); (e.currentTarget.elements.namedItem("vibe") as HTMLInputElement)?.blur(); }}
+      className="glass mt-3 flex items-center gap-2 rounded-2xl px-4">
+      <span className="text-xs text-zinc-500">✦</span>
+      <input name="vibe" value={v} maxLength={VIBE_MAX} onChange={(e) => setV(e.target.value)} onBlur={() => onCommit(v)}
+        placeholder={focus ? "lofi bollywood, rainy piano…" : "90s bollywood pls"} aria-label="Vibe request"
+        className="h-11 min-w-0 flex-1 bg-transparent text-sm text-white placeholder:text-zinc-600 focus:outline-none" />
+      {v && <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { setV(""); onCommit(""); }} className="text-xs text-zinc-500 hover:text-white" aria-label="Clear vibe">✕</button>}
+      {v.length > 70 && <span className="text-[10px] tabular-nums text-zinc-600">{VIBE_MAX - v.length}</span>}
+    </form>
+  );
 }

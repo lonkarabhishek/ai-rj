@@ -106,10 +106,9 @@ export async function getTracks(source: string): Promise<TrackInfo[]> {
  * the user's playlists, and discovery (top artists' top tracks + genre/artist searches).
  * Each source is wrapped in try/catch since Spotify restricts some endpoints for dev-mode apps.
  */
-const MODE_QUERIES: Record<Exclude<ListenMode, "default">, string[]> = {
+const MODE_QUERIES: Record<"gym" | "drive", string[]> = {
   gym: ["workout motivation", "gym hype", "beast mode", "running anthems", "bollywood workout", "edm workout", "hip hop workout"],
   drive: ["road trip singalong", "bollywood road trip", "feel good hits", "summer drive", "punjabi party", "throwback singalong"],
-  focus: ["lofi beats", "instrumental focus", "deep focus", "piano focus", "ambient study", "lofi hindi instrumental", "chillhop"],
 };
 
 /** Find the best Spotify match for a title/artist pair. */
@@ -122,8 +121,22 @@ export async function matchTrack(title: string, artist: string): Promise<TrackIn
   } catch { return null; }
 }
 
+const FOCUS_QUERIES = [
+  "instrumental lofi", "lofi beats", "lofi hip hop instrumental", "piano instrumental", "peaceful piano", "ambient instrumental",
+  "post-rock instrumental", "deep focus instrumental", "study beats", "chillhop instrumental", "neo classical piano",
+  "acoustic guitar instrumental", "lofi hindi instrumental", "sitar instrumental", "flute instrumental", "cinematic instrumental",
+  'genre:"lo-fi"', "genre:ambient", 'genre:"post-rock"', 'genre:"neo-classical"',
+];
+/** Text signals that a track has no vocals. */
+export const INSTRUMENTAL_RE = /instrumental|lo-?fi|chillhop|piano|ambient|lofi beats|study beats|post-?rock|neo-?classical|classical|orchestr|symphon|soundtrack|\bscore\b|sitar|flute|santoor|guitar instrumental|cello|violin|meditation|concentration|karaoke|no vocals|bgm|\binst\b/i;
+const VOCAL_RE = /\b(feat\.?|ft\.?|featuring)\b|\(lyrics?\)|\bvocal(s)? (mix|version)\b|acapella|a cappella/i;
+const INSTRUMENTAL_GENRE_RE = /lo-?fi|ambient|post-rock|neo-?classical|classical|chillhop|instrumental|soundtrack|focus|study|piano|new age|drone|minimal/i;
+let audioFeaturesOk: boolean | null = null; // Spotify blocks audio-features for newer apps; detect once.
+
 export class Curator {
-  constructor(private mode: ListenMode = "default", private seeds: TrackInfo[] = []) {}
+  constructor(private mode: ListenMode = "default", private seeds: TrackInfo[] = [], private vibe = "") {
+    this.vibe = vibe.trim().slice(0, 100);
+  }
   private played = new Set<string>();
   private queue: TrackInfo[] = [];
   private pools: Record<string, TrackInfo[]> = {};
@@ -134,6 +147,44 @@ export class Curator {
     try { return await fn(); } catch { return []; }
   }
   private map(items: any[]) { return items.map(toTrack).filter(Boolean) as TrackInfo[]; }
+  private async search(q: string, limit = 20, maxOffset = 60): Promise<any[]> {
+    try {
+      const off = maxOffset ? Math.floor(Math.random() * maxOffset) : 0;
+      return (await sp<any>(`/search?type=track&limit=${limit}&offset=${off}&q=${encodeURIComponent(q)}`)).tracks?.items ?? [];
+    } catch { return []; }
+  }
+
+  /** Strict instrumental filter for Focus: audio-features if Spotify allows it, else text + artist-genre signals. Unsure = out. */
+  private async instrumentalOnly(raw: any[]): Promise<TrackInfo[]> {
+    const vocalTaste = new Set([...this.seeds, ...(this.pools.top ?? []), ...(this.pools.saved ?? [])].map((t) => t.uri));
+    let items = raw.filter((t) => t?.type === "track" && t.uri && !vocalTaste.has(t.uri) && !VOCAL_RE.test(t.name ?? ""));
+    const seen = new Set<string>(); items = items.filter((t) => !seen.has(t.uri) && seen.add(t.uri));
+    if (!items.length) return [];
+    if (audioFeaturesOk !== false) {
+      try {
+        const ids = items.map((t) => t.id).slice(0, 100);
+        const j = await sp<any>(`/audio-features?ids=${ids.join(",")}`);
+        const f = new Map<string, any>((j.audio_features ?? []).filter(Boolean).map((x: any) => [x.id, x]));
+        if (f.size) {
+          audioFeaturesOk = true;
+          return this.map(items.filter((t) => { const x = f.get(t.id); return x && x.instrumentalness > 0.5 && x.speechiness < 0.33; }));
+        }
+      } catch { audioFeaturesOk = false; }
+    }
+    // Fallback: name/album/artist signals, or every artist tagged with an instrumental genre.
+    const text = (t: any) => `${t.name} ${t.album?.name ?? ""} ${(t.artists ?? []).map((a: any) => a.name).join(" ")}`;
+    const sure = items.filter((t) => INSTRUMENTAL_RE.test(text(t)));
+    const unsure = items.filter((t) => !INSTRUMENTAL_RE.test(text(t)));
+    let byGenre: any[] = [];
+    if (unsure.length) {
+      try {
+        const ids = [...new Set(unsure.map((t) => t.artists?.[0]?.id).filter(Boolean))].slice(0, 50);
+        const g = new Map<string, string[]>(((await sp<any>(`/artists?ids=${ids.join(",")}`)).artists ?? []).filter(Boolean).map((a: any) => [a.id, a.genres ?? []]));
+        byGenre = unsure.filter((t) => { const gs = g.get(t.artists?.[0]?.id) ?? []; return gs.length > 0 && gs.some((x) => INSTRUMENTAL_GENRE_RE.test(x)) && !gs.some((x) => /pop|rap|hip hop$|filmi|vocal|singer/i.test(x) && !INSTRUMENTAL_GENRE_RE.test(x)); });
+      } catch { /* no genres: unsure tracks stay out */ }
+    }
+    return this.map([...sure, ...byGenre]);
+  }
 
   private async loadBase() {
     const [s, m, l, saved, pls, artists] = await Promise.all([
@@ -154,6 +205,23 @@ export class Curator {
     ]);
     this.pools = { top: [...s, ...m, ...l], saved, playlists: pls, seeds: this.seeds };
     this.artists = artists.map((a: any) => ({ id: a.id, name: a.name, genres: a.genres ?? [] }));
+  }
+
+  /** Tracks steered by the listener's free-text vibe request ("90s bollywood pls"), flavoured by mode. */
+  private async vibeTracks(): Promise<TrackInfo[]> {
+    const v = this.vibe.replace(/\b(pls|please|plz|some|songs?|music|play|me|only|yaar|bro)\b/gi, " ").replace(/[^\p{L}\p{N}\s'&-]/gu, " ").replace(/\s+/g, " ").trim();
+    if (!v) return [];
+    const flavour: Record<ListenMode, string[]> = {
+      default: [v, `${v} hits`, `${v} best`],
+      gym: [`${v} workout`, `${v} party`, v],
+      drive: [`${v} road trip`, `${v} hits`, v],
+      focus: [`${v} instrumental`, `${v} lofi`, `${v} piano`, `${v} flute instrumental`],
+    };
+    // Blend with taste: pair the vibe with one of the listener's top artists' genres sometimes.
+    const g = this.mode !== "focus" ? this.artists.flatMap((a) => a.genres).sort(() => Math.random() - 0.5)[0] : undefined;
+    const qs = [...flavour[this.mode], ...(g ? [`${v} ${g}`] : [])].sort(() => Math.random() - 0.5).slice(0, 3);
+    const raw = (await Promise.all(qs.map((q) => this.search(q, 20, 40)))).flat();
+    return this.mode === "focus" ? this.instrumentalOnly(raw) : this.map(raw);
   }
 
   private async discovery(): Promise<TrackInfo[]> {
@@ -180,38 +248,50 @@ export class Curator {
 
   private async modeTracks(): Promise<TrackInfo[]> {
     if (this.mode === "default") return [];
-    const qs = [...MODE_QUERIES[this.mode]].sort(() => Math.random() - 0.5).slice(0, 3);
-    const res = await Promise.all(qs.map((q) => this.safe(async () =>
-      this.map((await sp<any>(`/search?type=track&limit=20&offset=${Math.floor(Math.random() * 60)}&q=${encodeURIComponent(q)}`)).tracks?.items ?? []))));
-    let tracks = res.flat();
     if (this.mode === "focus") {
-      // No audio-features for new apps: keep tracks that look instrumental/lofi by name, else trust the query.
-      const looks = tracks.filter((t) => /lo-?fi|instrumental|piano|ambient|beats|study|focus|chill/i.test(`${t.name} ${t.artists}`));
-      if (looks.length >= 5) tracks = looks;
+      const qs = [...FOCUS_QUERIES].sort(() => Math.random() - 0.5).slice(0, 4);
+      let raw = (await Promise.all(qs.map((q) => this.search(q, 20, 60)))).flat();
+      let out = await this.instrumentalOnly(raw);
+      if (out.length < 6) { // page offsets missed: retry the safest queries from the top
+        raw = (await Promise.all(["instrumental lofi", "peaceful piano", "ambient instrumental"].map((q) => this.search(q, 20, 0)))).flat();
+        out = [...out, ...(await this.instrumentalOnly(raw))];
+      }
+      return out;
     }
-    return tracks;
+    const qs = [...MODE_QUERIES[this.mode as "gym" | "drive"]].sort(() => Math.random() - 0.5).slice(0, 3);
+    return this.map((await Promise.all(qs.map((q) => this.search(q)))).flat());
   }
 
   private async refill() {
+    if (this.mode === "focus") {
+      // Focus: instrumental only. Never fall back to vocal favourites.
+      const [vibeT, modeT] = await Promise.all([this.vibeTracks(), this.modeTracks()]);
+      this.round++;
+      const batch = [...this.take(vibeT, this.vibe ? 8 : 0), ...this.take(modeT, this.vibe ? 4 : 12)].sort(() => Math.random() - 0.5);
+      this.queue.push(...batch);
+      if (!batch.length && this.played.size) this.played.clear();
+      return;
+    }
     const poolsEmpty = !Object.values(this.pools).some((p) => p?.length);
-    if ((this.round === 0 || poolsEmpty) && (this.mode !== "focus" || poolsEmpty && this.round > 1)) await this.loadBase();
+    if (this.round === 0 || poolsEmpty) await this.loadBase();
     this.round++;
+    const vibeT = await this.vibeTracks();
+    const hasVibe = vibeT.length > 0;
     if (this.mode !== "default") {
       const modeT = await this.modeTracks();
-      const batch = this.mode === "focus"
-        ? this.take(modeT, 12) // focus: only instrumental-style tracks, no lyrics-heavy favourites
-        : [...this.take(modeT, 8), ...this.take(this.pools.top, 2), ...this.take(this.pools.saved, 1), ...this.take(this.pools.seeds, 1)].sort(() => Math.random() - 0.5);
+      const batch = [...this.take(vibeT, hasVibe ? 6 : 0), ...this.take(modeT, hasVibe ? 4 : 8), ...this.take(this.pools.top, 2), ...this.take(this.pools.saved, 1), ...this.take(this.pools.seeds, 1)].sort(() => Math.random() - 0.5);
       if (!batch.length) batch.push(...this.take(this.pools.top, 6), ...this.take(this.pools.saved, 6)); // mode search failed: fall back to favourites
       this.queue.push(...batch);
       if (!batch.length && this.played.size) this.played.clear();
       return;
     }
     const disc = await this.discovery();
-    // Interleave: familiar favourites with ~1/3 discovery.
+    // Interleave: familiar favourites with ~1/3 discovery; a vibe request takes about half the batch.
     const batch = [
-      ...this.take(this.pools.seeds, this.seeds.length ? 3 : 0),
-      ...this.take(this.pools.top, this.seeds.length ? 3 : 4), ...this.take(this.pools.saved, 3),
-      ...this.take(this.pools.playlists, 3), ...this.take(disc, 5),
+      ...this.take(vibeT, hasVibe ? 7 : 0),
+      ...this.take(this.pools.seeds, this.seeds.length ? (hasVibe ? 1 : 3) : 0),
+      ...this.take(this.pools.top, hasVibe ? 2 : this.seeds.length ? 3 : 4), ...this.take(this.pools.saved, hasVibe ? 1 : 3),
+      ...this.take(this.pools.playlists, hasVibe ? 1 : 3), ...this.take(disc, hasVibe ? 2 : 5),
     ].sort(() => Math.random() - 0.5);
     // Avoid two songs by the same artist back to back.
     for (let i = 1; i < batch.length; i++) if (batch[i].artists === batch[i - 1].artists) batch.push(...batch.splice(i, 1));
