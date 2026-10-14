@@ -1,31 +1,39 @@
-const SETTINGS = {
-  chill: { stability: 0.7, similarity_boost: 0.75, style: 0.1 },
-  balanced: { stability: 0.5, similarity_boost: 0.75, style: 0.3 },
-  hype: { stability: 0.3, similarity_boost: 0.8, style: 0.65 },
-} as const;
+import { azureEnabled, azureTts, defaultAzureVoice, elevenEnabled, elevenTts, isAzureId, TtsError } from "@/lib/tts";
+import type { Energy, Language, ListenMode } from "@/lib/prefs";
 
+const EL_DEFAULT = "21m00Tcm4TlvDq8ikWAM"; // ElevenLabs premade "Rachel", present on every account
+
+/**
+ * Provider chain: the chosen voice's provider first, then the other one, else 502 (client falls back to the browser voice).
+ * Response header X-TTS-Provider says who spoke; X-TTS-Fallback lists failures along the way.
+ */
 export async function POST(req: Request) {
-  const { text, voiceId, energy = "balanced" } = await req.json();
-  if (!text || !voiceId) return Response.json({ error: "text and voiceId required" }, { status: 400 });
-  let res: Response | null = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
-    method: "POST",
-    headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY ?? "", "Content-Type": "application/json", Accept: "audio/mpeg" },
-    body: JSON.stringify({
-      text: String(text).slice(0, 1500),
-      model_id: "eleven_multilingual_v2",
-      voice_settings: { ...(SETTINGS[energy as keyof typeof SETTINGS] ?? SETTINGS.balanced), use_speaker_boost: true },
-    }),
-    }).catch(() => null as unknown as Response);
-    if (res && (res.ok || (res.status < 500 && res.status !== 429))) break;
-    await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+  const { text, voiceId, energy = "balanced", mode = "default", language = "english" } =
+    (await req.json()) as { text: string; voiceId?: string; energy?: Energy; mode?: ListenMode; language?: Language };
+  if (!text) return Response.json({ error: "text required" }, { status: 400 });
+  const clean = String(text).slice(0, 1500);
+
+  const attempts: { provider: string; run: () => Promise<ArrayBuffer> }[] = [];
+  const azureVoice = voiceId && isAzureId(voiceId) ? voiceId : defaultAzureVoice(language);
+  const elVoice = voiceId && !isAzureId(voiceId) ? voiceId : EL_DEFAULT;
+  const azure = { provider: "azure", run: () => azureTts(clean, azureVoice, energy, mode) };
+  const eleven = { provider: "elevenlabs", run: () => elevenTts(clean, elVoice, energy) };
+  if (voiceId && !isAzureId(voiceId)) attempts.push(eleven, azure); else attempts.push(azure, eleven);
+
+  const failures: string[] = [];
+  for (const a of attempts) {
+    if (a.provider === "azure" && !azureEnabled()) { failures.push("azure:not_configured"); continue; }
+    if (a.provider === "elevenlabs" && !elevenEnabled()) { failures.push("elevenlabs:not_configured"); continue; }
+    try {
+      const audio = await a.run();
+      return new Response(audio, { headers: { "Content-Type": "audio/mpeg", "Cache-Control": "no-store", "X-TTS-Provider": a.provider, "X-TTS-Fallback": failures.join(",") } });
+    } catch (e) {
+      failures.push(e instanceof TtsError ? `${e.provider}:${e.code}` : `${a.provider}:error`);
+    }
   }
-  if (!res) return Response.json({ error: "ElevenLabs unreachable" }, { status: 502 });
-  if (!res.ok) {
-    const detail = (await res.text()).slice(0, 400);
-    const code = detail.match(/"code":"([a-z_]+)"/)?.[1] ?? detail.match(/"status":"([a-z_]+)"/)?.[1] ?? `http_${res.status}`;
-    return Response.json({ error: code === "quota_exceeded" ? "ElevenLabs credits used up" : `ElevenLabs ${res.status}`, code, detail }, { status: 502 });
-  }
-  return new Response(res.body, { headers: { "Content-Type": "audio/mpeg", "Cache-Control": "no-store" } });
+  const quota = failures.some((f) => f.endsWith("quota_exceeded"));
+  return Response.json({
+    error: quota && !azureEnabled() ? "ElevenLabs credits used up and Azure Speech isn't set up" : "No voice provider could speak",
+    code: quota ? "quota_exceeded" : "all_failed", failures,
+  }, { status: 502 });
 }

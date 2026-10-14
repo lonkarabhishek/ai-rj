@@ -202,12 +202,14 @@ function LiveInner() {
       const lang = { english: "en-IN", hinglish: "hi-IN", hindi: "hi-IN", marathi: "mr-IN" }[p.language];
       if (ttsQuotaRef.current) { log("ElevenLabs credits used up: browser voice"); return { script: seg.script, audioUrl: null, lang }; }
       try {
-        const r = await withTimeout(fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: seg.script, voiceId: p.voiceId, energy: p.energy }) }), 30000, "voice");
+        const r = await withTimeout(fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: seg.script, voiceId: p.voiceId, energy: p.energy, mode: modeRef.current, language: p.language }) }), 30000, "voice");
         if (!r.ok) {
           const j = await r.json().catch(() => ({}));
-          if (j.code === "quota_exceeded") { ttsQuotaRef.current = true; setNotice("ElevenLabs credits are used up, so your RJ is using the browser voice for now."); setTimeout(() => setNotice(null), 6000); }
+          if (j.code === "quota_exceeded") { ttsQuotaRef.current = true; setNotice("Voice service unavailable (ElevenLabs credits used up, Azure not set up). Using the browser voice for now."); setTimeout(() => setNotice(null), 6000); }
           throw new Error(`${j.error ?? `tts ${r.status}`}${j.code ? ` (${j.code})` : ""}`);
         }
+        const prov = r.headers.get("X-TTS-Provider"), fb = r.headers.get("X-TTS-Fallback");
+        if (fb) log(`voice: ${prov} (fallback after ${fb})`);
         const blob = await r.blob();
         if (!blob.size || !/audio/.test(blob.type)) throw new Error(`voice returned ${blob.type || "nothing"} (${blob.size}B)`);
         return { script: seg.script, audioUrl: URL.createObjectURL(blob), lang };

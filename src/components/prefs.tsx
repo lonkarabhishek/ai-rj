@@ -22,7 +22,7 @@ export function usePrefs(): [Prefs, Up, boolean, (p: Prefs) => void] {
   return [p, up, loaded, set];
 }
 
-type Voice = { id: string; name: string; labels: Record<string, string>; previewUrl?: string };
+type Voice = { id: string; provider: "azure" | "elevenlabs"; name: string; locale?: string; labels: Record<string, string>; previewUrl?: string };
 let voiceCache: Voice[] | null = null;
 export function useVoices() {
   const [voices, setVoices] = useState<Voice[]>(voiceCache ?? []);
@@ -109,7 +109,11 @@ export function VoicePicker({ p, up, compact }: { p: Prefs; up: Up; compact?: bo
   const [rjBusy, setRjBusy] = useState(false);
   const audio = useRef<HTMLAudioElement | null>(null);
   useEffect(() => {
-    if (!p.voiceId && voices[0]) { up("voiceId", voices[0].id); up("voiceName", voices[0].name); }
+    if (!p.voiceId && voices[0]) {
+      const want = p.language === "hindi" ? "azure:hi-IN-SwaraNeural" : p.language === "marathi" ? "azure:mr-IN-AarohiNeural" : "azure:en-IN-NeerjaNeural";
+      const v = voices.find((x) => x.id === want) ?? voices[0];
+      up("voiceId", v.id); up("voiceName", v.name);
+    }
   }, [voices]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => audio.current?.pause(), []);
 
@@ -119,26 +123,45 @@ export function VoicePicker({ p, up, compact }: { p: Prefs; up: Up; compact?: bo
     a.onended = () => setPlaying(null); a.onerror = () => setPlaying(null);
     a.play().catch(() => setPlaying(null));
   }
+  async function preview(v: Voice) {
+    if (v.previewUrl) return play(v.previewUrl, v.id);
+    setPlaying(v.id);
+    const sample = v.locale === "hi-IN" ? `नमस्ते ${p.listenerName}, मैं हूँ आपकी RJ।` : v.locale === "mr-IN" ? `नमस्कार ${p.listenerName}, मी तुमचा RJ.` : `Hey ${p.listenerName}, this is your RJ. Ready when you are.`;
+    const r = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: sample, voiceId: v.id, energy: p.energy, language: p.language }) }).catch(() => null);
+    if (r?.ok) play(URL.createObjectURL(await r.blob()), v.id); else setPlaying(null);
+  }
   async function hearAsRj() {
     setRjBusy(true);
     try {
       const lines = { english: `Hey ${p.listenerName}, this is ${p.rjName}. Ready when you are.`, hinglish: `Hello ${p.listenerName}, main hoon ${p.rjName}. Chalo shuru karte hain!`, hindi: `नमस्ते ${p.listenerName}, मैं हूँ ${p.rjName}। चलिए शुरू करते हैं!`, marathi: `नमस्कार ${p.listenerName}, मी ${p.rjName}. चला सुरू करूया!` };
-      const r = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: lines[p.language], voiceId: p.voiceId, energy: p.energy }) });
+      const r = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: lines[p.language], voiceId: p.voiceId, energy: p.energy, language: p.language, mode: p.defaultMode }) });
       if (r.ok) play(URL.createObjectURL(await r.blob()), "rj");
     } finally { setRjBusy(false); }
   }
 
-  if (error) return <p className="text-sm text-red-300">{error}. Check the ElevenLabs key.</p>;
+  const groups: [string, Voice[]][] = [];
+  const add = (label: string, list: Voice[]) => { if (list.length) groups.push([label, list]); };
+  const az = voices.filter((v) => v.provider === "azure");
+  add("Azure · English (India)", az.filter((v) => v.locale === "en-IN"));
+  add("Azure · Hindi", az.filter((v) => v.locale === "hi-IN"));
+  add("Azure · Marathi", az.filter((v) => v.locale === "mr-IN"));
+  add("Azure · Multilingual", az.filter((v) => !["en-IN", "hi-IN", "mr-IN"].includes(v.locale ?? "")));
+  add("ElevenLabs", voices.filter((v) => v.provider === "elevenlabs"));
+  if (error) return <p className="text-sm text-red-300">{error}. Add an Azure Speech or ElevenLabs key.</p>;
   if (!voices.length) return <div className="flex items-center gap-2 text-sm text-zinc-500"><Spinner /> Loading voices…</div>;
   return (
     <div className="space-y-3">
-      <div className={cx("grid gap-2 overflow-y-auto no-scrollbar pr-1", compact ? "max-h-56" : "max-h-[46vh]", "grid-cols-1 sm:grid-cols-2")}>
-        {voices.map((v) => {
+      <div className={cx("space-y-5 overflow-y-auto no-scrollbar pr-1", compact ? "max-h-72" : "max-h-[50vh]")}>
+        {groups.map(([label, list]) => (
+          <div key={label} className="space-y-2">
+            <div className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">{label}</div>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {list.map((v) => {
           const on = p.voiceId === v.id;
           return (
             <div key={v.id} onClick={() => { up("voiceId", v.id); up("voiceName", v.name); }}
               className={cx("flex cursor-pointer items-center gap-3 rounded-2xl border px-3 py-2.5 transition", on ? "border-white bg-white/10" : "border-white/10 hover:border-white/25")}>
-              <button onClick={(e) => { e.stopPropagation(); if (playing === v.id) { audio.current?.pause(); setPlaying(null); } else if (v.previewUrl) play(v.previewUrl, v.id); }}
+              <button onClick={(e) => { e.stopPropagation(); if (playing === v.id) { audio.current?.pause(); setPlaying(null); } else preview(v); }}
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-xs hover:bg-white/20" aria-label="Preview">{playing === v.id ? "❚❚" : "▶"}</button>
               <div className="min-w-0">
                 <div className="truncate text-sm font-medium">{v.name.split(" - ")[0]}</div>
@@ -148,6 +171,9 @@ export function VoicePicker({ p, up, compact }: { p: Prefs; up: Up; compact?: bo
             </div>
           );
         })}
+            </div>
+          </div>
+        ))}
       </div>
       <button onClick={hearAsRj} disabled={rjBusy || !p.voiceId} className="flex items-center gap-2 text-sm text-fuchsia-300 hover:text-fuchsia-200 disabled:opacity-50">
         {rjBusy ? <Spinner /> : "▶"} Hear it as your RJ, in {LANGUAGES.find((l) => l.id === p.language)?.label}

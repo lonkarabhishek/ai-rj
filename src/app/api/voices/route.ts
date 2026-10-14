@@ -1,11 +1,8 @@
+import { azureEnabled, elevenEnabled, listAzureVoices, listElevenVoices } from "@/lib/tts";
+
 export async function GET() {
-  const res = await fetch("https://api.elevenlabs.io/v2/voices?page_size=100", {
-    headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY ?? "" },
-  });
-  if (!res.ok) return Response.json({ error: `ElevenLabs ${res.status}` }, { status: 502 });
-  const j = await res.json();
-  const voices = (j.voices ?? []).map((v: { voice_id: string; name: string; category?: string; labels?: Record<string, string>; preview_url?: string }) => ({
-    id: v.voice_id, name: v.name, category: v.category, labels: v.labels ?? {}, previewUrl: v.preview_url,
-  }));
-  return Response.json({ voices });
+  const [azure, eleven] = await Promise.all([listAzureVoices(), listElevenVoices()]);
+  const voices = [...azure, ...eleven];
+  if (!voices.length) return Response.json({ voices: [], providers: { azure: azureEnabled(), elevenlabs: elevenEnabled() }, error: "No voice provider available" }, { status: 502 });
+  return Response.json({ voices, providers: { azure: azureEnabled(), elevenlabs: elevenEnabled() } });
 }
