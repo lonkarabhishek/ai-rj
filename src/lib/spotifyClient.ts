@@ -142,6 +142,7 @@ export class Curator {
   private pools: Record<string, TrackInfo[]> = {};
   private round = 0;
   private artists: { id: string; name: string; genres: string[] }[] = [];
+  private discP: Promise<TrackInfo[]> | null = null;
 
   private async safe(fn: () => Promise<TrackInfo[]>) {
     try { return await fn(); } catch { return []; }
@@ -187,7 +188,14 @@ export class Curator {
   }
 
   private async loadBase() {
-    const [s, m, l, saved, pls, artists] = await Promise.all([
+    // Playlists are slow (one request each): load them in the background so the first songs come fast.
+    const plsP = this.safe(async () => {
+      const lists = (await getPlaylists()).slice(0, 8);
+      const all = await Promise.all(lists.map((pl: { id: string }) => getTracks(pl.id).catch(() => [])));
+      return all.flat();
+    });
+    plsP.then((pls) => { this.pools.playlists = pls; });
+    const [s, m, l, saved, artists] = await Promise.all([
       this.safe(async () => this.map((await sp<any>("/me/top/tracks?limit=50&time_range=short_term")).items ?? [])),
       this.safe(async () => this.map((await sp<any>("/me/top/tracks?limit=50&time_range=medium_term")).items ?? [])),
       this.safe(async () => this.map((await sp<any>("/me/top/tracks?limit=50&time_range=long_term")).items ?? [])),
@@ -196,14 +204,9 @@ export class Curator {
         const pages = await Promise.all(offs.map((o) => sp<any>(`/me/tracks?limit=50&offset=${o}`).catch(() => ({ items: [] }))));
         return this.map(pages.flatMap((p) => (p.items ?? []).map((i: any) => i.track)));
       }),
-      this.safe(async () => {
-        const lists = (await getPlaylists()).slice(0, 8);
-        const all = await Promise.all(lists.map((pl: { id: string }) => getTracks(pl.id).catch(() => [])));
-        return all.flat();
-      }),
       sp<any>("/me/top/artists?limit=20&time_range=medium_term").then((j) => j.items ?? []).catch(() => []),
     ]);
-    this.pools = { top: [...s, ...m, ...l], saved, playlists: pls, seeds: this.seeds };
+    this.pools = { top: [...s, ...m, ...l], saved, playlists: this.pools.playlists ?? [], seeds: this.seeds };
     this.artists = artists.map((a: any) => ({ id: a.id, name: a.name, genres: a.genres ?? [] }));
   }
 
@@ -285,7 +288,10 @@ export class Curator {
       if (!batch.length && this.played.size) this.played.clear();
       return;
     }
-    const disc = await this.discovery();
+    // First batch: don't wait for discovery searches; they feed the next batch.
+    let disc: TrackInfo[] = [];
+    if (this.round <= 1) { this.discP = this.discovery().catch(() => []); }
+    else { disc = await (this.discP ?? this.discovery()); this.discP = this.discovery().catch(() => []); }
     // Interleave: familiar favourites with ~1/3 discovery; a vibe request takes about half the batch.
     const batch = [
       ...this.take(vibeT, hasVibe ? 7 : 0),

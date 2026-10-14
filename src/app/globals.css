@@ -72,5 +72,12 @@ body { font-family: var(--font-sans); letter-spacing: -0.005em; }
 .mascot.is-blink .m-eyes { transform: scaleY(.1); }
 .mascot.is-happy .m-eyes { transform: scaleY(.45) translateY(-1px); transition-duration: .25s; }
 @keyframes m-sway { 0%,100% { transform: translateY(0) rotate(0deg); } 50% { transform: translateY(-2.5px) rotate(-1.5deg); } }
+.mascot .m-waves path { opacity: 0; }
+.mascot-tuning .m-wave1 { animation: m-wave 1.6s ease-out infinite; }
+.mascot-tuning .m-wave2 { animation: m-wave 1.6s ease-out .4s infinite; }
+@keyframes m-wave { 0% { opacity: 0; } 30% { opacity: .8; } 100% { opacity: 0; } }
+.skeleton { background: linear-gradient(90deg, rgb(255 255 255 / .05) 0%, rgb(255 255 255 / .11) 50%, rgb(255 255 255 / .05) 100%); background-size: 200% 100%; animation: shimmer 1.6s ease-in-out infinite; }
+@keyframes shimmer { from { background-position: 150% 0; } to { background-position: -50% 0; } }
+@media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } .mascot-tuning .m-waves path { animation: none; opacity: .5; } }
 @media (prefers-reduced-motion: reduce) { .mascot *, .mascot .m-body { animation: none !important; transition: none !important; } }
 @media (prefers-reduced-motion: reduce) { .ambient::before, .ambient::after, .onair-orb { animation: none !important; } }

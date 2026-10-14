@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type React from "react";
 import { cx } from "./ui";
 
-type State = "idle" | "live" | "talking";
+type State = "idle" | "live" | "talking" | "tuning";
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 /**
@@ -70,7 +70,8 @@ export function Mascot({ state = "idle", className, getLevel }: { state?: State;
     window.addEventListener("pointermove", onMove); window.addEventListener("pointerdown", onDown);
     const tick = (now: number) => {
       // gaze: pointer > glance > rest
-      if (now > pointerUntil) {
+      if (stateRef.current === "tuning" && now > pointerUntil) { tx = Math.sin(now / 520) * 2.8; ty = -0.6; }
+      else if (now > pointerUntil) {
         if (now > nextGlance) {
           const a = Math.random() * Math.PI * 2; tx = Math.cos(a) * 2.6; ty = Math.sin(a) * 1.8;
           if (Math.random() < 0.35) { tx = -1.2; ty = 1; } // toward the viewer
@@ -123,6 +124,10 @@ export function Mascot({ state = "idle", className, getLevel }: { state?: State;
         <g ref={voiceRef}>
           <g transform="rotate(-15 60 64)">
             <line x1="78" y1="36" x2="82" y2="22" stroke="#f3efe8" strokeWidth="2.5" strokeLinecap="round" />
+            <g className="m-waves" fill="none" stroke="#f3efe8" strokeWidth="1.6" strokeLinecap="round">
+              <path className="m-wave1" d="M76.5 14.5 A8 8 0 0 1 82.6 10" /><path className="m-wave1" d="M88.7 14.5 A8 8 0 0 0 82.6 10" transform="scale(-1 1) translate(-165.2 0)" />
+              <path className="m-wave2" d="M72.5 13 A13 13 0 0 1 82.6 5" /><path className="m-wave2" d="M72.5 13 A13 13 0 0 1 82.6 5" transform="scale(-1 1) translate(-165.2 0)" />
+            </g>
             <circle ref={tipRef} className="m-tip" cx="82.6" cy="20" r="3.4" fill="#f3efe8" />
             <rect x="14" y="36" width="92" height="58" rx="29" fill="#f3efe8" />
           </g>
