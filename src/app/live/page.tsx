@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { loadPrefs, type Prefs, type TrackInfo } from "@/lib/prefs";
-import { getMe, getToken, getTracks, sp } from "@/lib/spotifyClient";
+import { Curator, getMe, getToken, sp } from "@/lib/spotifyClient";
 
 declare global { interface Window { Spotify: any; onSpotifyWebPlaybackSDKReady: () => void } }
 
@@ -107,11 +107,10 @@ export default function Live() {
     // unlock audio on this user gesture
     new Audio().play().catch(() => {});
     const m = await setupSpotify(); setMode(m);
-    let tracks: TrackInfo[] = [];
-    if (m !== "none") { try { tracks = await getTracks(p.source); } catch (e) { setStatus(String(e)); } }
+    const curator = m !== "none" ? new Curator() : null;
     let prev: TrackInfo | null = null;
+    let next: TrackInfo | null = curator ? await curator.next() : null;
     for (let i = 0; !stopRef.current; i++) {
-      const next = tracks.length ? tracks[i % tracks.length] : null;
       setStatus(`${p.rjName} is warming up the mic…`);
       try {
         const seg = await fetch("/api/segment", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prefs: p, next, prev, index: i }) }).then((r) => r.json());
@@ -120,9 +119,11 @@ export default function Live() {
         await speak(seg.script, p);
       } catch (e) { setStatus(String(e)); await sleep(3000); }
       if (stopRef.current) break;
-      if (!next) { setStatus("Connect Spotify in Settings for music. RJ talks again in a bit."); await sleep(20000); continue; }
+      if (!next) { setStatus("Connect Spotify in Settings for music. RJ talks again in a bit."); await sleep(20000); next = curator ? await curator.next() : null; continue; }
+      const upcoming = curator ? curator.next() : Promise.resolve(null); // prefetch while song plays
       await playTrack(next, m);
       prev = next;
+      next = await upcoming;
     }
   }
 

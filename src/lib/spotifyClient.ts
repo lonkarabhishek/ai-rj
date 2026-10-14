@@ -56,3 +56,83 @@ export async function getTracks(source: string): Promise<TrackInfo[]> {
   const tracks = raw.map(toTrack).filter(Boolean) as TrackInfo[];
   return tracks.sort(() => Math.random() - 0.5);
 }
+
+/**
+ * Endless, no-repeat auto-curated stream. Mixes top tracks (3 time ranges), saved tracks,
+ * the user's playlists, and discovery (top artists' top tracks + genre/artist searches).
+ * Each source is wrapped in try/catch since Spotify restricts some endpoints for dev-mode apps.
+ */
+export class Curator {
+  private played = new Set<string>();
+  private queue: TrackInfo[] = [];
+  private pools: Record<string, TrackInfo[]> = {};
+  private round = 0;
+  private artists: { id: string; name: string; genres: string[] }[] = [];
+
+  private async safe(fn: () => Promise<TrackInfo[]>) {
+    try { return await fn(); } catch { return []; }
+  }
+  private map(items: any[]) { return items.map(toTrack).filter(Boolean) as TrackInfo[]; }
+
+  private async loadBase() {
+    const [s, m, l, saved, pls, artists] = await Promise.all([
+      this.safe(async () => this.map((await sp<any>("/me/top/tracks?limit=50&time_range=short_term")).items ?? [])),
+      this.safe(async () => this.map((await sp<any>("/me/top/tracks?limit=50&time_range=medium_term")).items ?? [])),
+      this.safe(async () => this.map((await sp<any>("/me/top/tracks?limit=50&time_range=long_term")).items ?? [])),
+      this.safe(async () => {
+        const offs = [0, 50, 100, 150];
+        const pages = await Promise.all(offs.map((o) => sp<any>(`/me/tracks?limit=50&offset=${o}`).catch(() => ({ items: [] }))));
+        return this.map(pages.flatMap((p) => (p.items ?? []).map((i: any) => i.track)));
+      }),
+      this.safe(async () => {
+        const lists = (await getPlaylists()).slice(0, 8);
+        const all = await Promise.all(lists.map((pl: { id: string }) => getTracks(pl.id).catch(() => [])));
+        return all.flat();
+      }),
+      sp<any>("/me/top/artists?limit=20&time_range=medium_term").then((j) => j.items ?? []).catch(() => []),
+    ]);
+    this.pools = { top: [...s, ...m, ...l], saved, playlists: pls };
+    this.artists = artists.map((a: any) => ({ id: a.id, name: a.name, genres: a.genres ?? [] }));
+  }
+
+  private async discovery(): Promise<TrackInfo[]> {
+    if (!this.artists.length) return [];
+    const shuffled = [...this.artists].sort(() => Math.random() - 0.5).slice(0, 3);
+    const results = await Promise.all(shuffled.map(async (a) => {
+      const viaTop = await this.safe(async () => this.map((await sp<any>(`/artists/${a.id}/top-tracks?market=from_token`)).tracks ?? []));
+      const genre = a.genres[Math.floor(Math.random() * a.genres.length)];
+      const q = genre ? `genre:"${genre}"` : a.name;
+      const viaSearch = await this.safe(async () => this.map((await sp<any>(`/search?type=track&limit=20&offset=${Math.floor(Math.random() * 100)}&q=${encodeURIComponent(q)}`)).tracks?.items ?? []));
+      return [...viaTop.slice(0, 4), ...viaSearch];
+    }));
+    return results.flat();
+  }
+
+  private take(pool: TrackInfo[] | undefined, n: number) {
+    const fresh = (pool ?? []).filter((t) => t.uri && !this.played.has(t.uri) && !this.queue.some((q) => q.uri === t.uri));
+    return fresh.sort(() => Math.random() - 0.5).slice(0, n);
+  }
+
+  private async refill() {
+    if (this.round === 0) await this.loadBase();
+    this.round++;
+    const disc = await this.discovery();
+    // Interleave: familiar favourites with ~1/3 discovery.
+    const batch = [
+      ...this.take(this.pools.top, 4), ...this.take(this.pools.saved, 3),
+      ...this.take(this.pools.playlists, 3), ...this.take(disc, 5),
+    ].sort(() => Math.random() - 0.5);
+    // Avoid two songs by the same artist back to back.
+    for (let i = 1; i < batch.length; i++) if (batch[i].artists === batch[i - 1].artists) batch.push(...batch.splice(i, 1));
+    this.queue.push(...batch);
+    if (!batch.length && this.played.size) this.played.clear(); // exhausted everything: allow repeats rather than stop
+  }
+
+  async next(): Promise<TrackInfo | null> {
+    for (let tries = 0; this.queue.length < 3 && tries < 3; tries++) await this.refill();
+    const t = this.queue.shift() ?? null;
+    if (t?.uri) this.played.add(t.uri);
+    return t;
+  }
+  peek() { return this.queue[0] ?? null; }
+}

@@ -95,7 +95,7 @@ export default function Settings() {
           <>
             <p className="text-sm text-zinc-400">Connected as <b className="text-zinc-200">{me.display_name}</b> · {me.product === "premium" ? "Premium ✓ full songs play here" : "Free account: full playback needs Premium, so MyRJ falls back to previews / opening Spotify"}</p>
             <select className={input} value={p.source} onChange={(e) => up("source", e.target.value)}>
-              <option value="top">My top tracks</option>
+              <option value="top">Auto-curate everything (recommended)</option>
               {playlists.map((pl) => <option key={pl.id} value={pl.id}>{pl.name}</option>)}
             </select>
             <button className="text-xs text-zinc-500 underline" onClick={async () => { await fetch("/api/spotify/logout", { method: "POST" }); setMe(null); }}>Disconnect</button>

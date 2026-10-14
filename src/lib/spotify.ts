@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 
 export const SCOPES = [
-  "user-read-email", "user-read-private", "user-top-read",
+  "user-read-email", "user-read-private", "user-top-read", "user-library-read",
   "playlist-read-private", "playlist-read-collaborative",
   "streaming", "user-read-playback-state", "user-modify-playback-state",
 ].join(" ");
