@@ -3,22 +3,22 @@
 @theme {
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
-  --color-accent: #f0b46e;
-  --color-accent-strong: #d9893a;
+  --color-accent: #ff8a7a;
+  --color-accent-strong: #7fe0c0;
 }
 
 :root { color-scheme: dark; }
 html, body { background: #0a0908; color: #f3efe8; -webkit-font-smoothing: antialiased; }
 body { font-family: var(--font-sans); letter-spacing: -0.005em; }
-::selection { background: #f0b46e44; }
+::selection { background: #ff8a7a44; }
 
 /* ambient backdrop */
 .ambient::before {
   content: ""; position: fixed; inset: -20%; z-index: -1; pointer-events: none;
   background:
-    radial-gradient(42% 34% at 18% 8%, #f0b46e14, transparent 70%),
-    radial-gradient(36% 30% at 88% 34%, #c9a27a0f, transparent 70%),
-    radial-gradient(50% 40% at 50% 105%, #e0956012, transparent 70%);
+    radial-gradient(42% 34% at 18% 8%, #ff8a7a12, transparent 70%),
+    radial-gradient(36% 30% at 88% 34%, #8cc8ff10, transparent 70%),
+    radial-gradient(50% 40% at 50% 105%, #7fe0c00f, transparent 70%);
   filter: blur(24px);
   animation: aurora 28s ease-in-out infinite alternate;
 }
@@ -58,18 +58,31 @@ body { font-family: var(--font-sans); letter-spacing: -0.005em; }
 }
 @keyframes grain { 0% { transform: translate(0,0); } 25% { transform: translate(-2%,1%); } 50% { transform: translate(1%,-2%); } 75% { transform: translate(2%,2%); } 100% { transform: translate(0,0); } }
 .stage-card {
-  background: radial-gradient(70% 60% at 50% 42%, #2a2018 0%, #15120f 55%, #0e0c0a 100%);
+  background: radial-gradient(70% 60% at 50% 42%, #1f1d1c 0%, #141312 60%, #0e0d0c 100%);
   box-shadow: inset 0 1px 0 rgb(255 240 220 / .07), inset 0 0 0 1px rgb(255 240 220 / .05);
 }
-.onair-orb {
-  width: 38%; aspect-ratio: 1; border-radius: 9999px;
-  background: radial-gradient(circle at 50% 40%, #ffe2b8 0%, #f3b36b 30%, #c9733099 58%, transparent 72%);
-  filter: blur(1px); opacity: .55; transition: opacity .8s, transform .8s;
-}
-.onair-orb.is-live { opacity: .9; animation: glow 3.6s ease-in-out infinite; }
-.onair-orb.is-talking { animation-duration: 1.4s; }
-@keyframes glow { 0%,100% { transform: scale(1); filter: blur(1px) brightness(1); } 50% { transform: scale(1.08); filter: blur(2px) brightness(1.15); } }
 .onair-dot { background: #d8cfc4; opacity: .6; }
-.onair-dot.is-live { background: #f3b36b; opacity: 1; box-shadow: 0 0 10px 2px #f3b36b88; }
-.orb-tile { background: radial-gradient(circle at 50% 40%, #ffe2b8 0%, #f3b36b 28%, #3a2a1c 62%, #15120f 100%); box-shadow: 0 10px 40px -12px rgb(240 180 110 / .5), inset 0 1px 0 rgb(255 240 220 / .15); }
+.onair-dot.is-live { background: #ff8a7a; opacity: 1; box-shadow: 0 0 10px 2px #ff8a7a88; }
+
+/* radio mascot */
+.mascot { overflow: visible; shape-rendering: geometricPrecision; }
+.mascot .m-body { transform-origin: 60px 100px; transform-box: view-box; }
+.mascot-idle .m-body { animation: m-float 4.5s ease-in-out infinite; }
+.mascot-live .m-body { animation: m-bob .52s cubic-bezier(.3,0,.3,1) infinite alternate; }
+.mascot-talking .m-body { animation: m-bob .7s ease-in-out infinite alternate; }
+.mascot .m-eyes { transform-origin: 52px 58px; transform-box: view-box; transition: transform .08s; }
+.mascot.is-blink .m-eyes { transform: scaleY(.1); }
+.mascot .m-tip { transform-origin: 90px 12px; transform-box: view-box; }
+.mascot-talking .m-tip { animation: m-pulse .6s ease-in-out infinite; }
+.mascot-live .m-tip { animation: m-pulse 1.04s ease-in-out infinite; opacity: .9; }
+.mascot .m-bar { transform-box: fill-box; transform-origin: center; }
+.mascot-talking .m-bar { animation: m-talk .32s ease-in-out infinite alternate; }
+.mascot .m-dial { transform-origin: 90px 58px; transform-box: view-box; }
+.mascot-live .m-dial, .mascot-talking .m-dial { animation: m-dial 6s linear infinite; }
+@keyframes m-float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+@keyframes m-bob { from { transform: translateY(0) scale(1, 1); } to { transform: translateY(-4px) scale(1.01, .985); } }
+@keyframes m-pulse { 0%,100% { transform: scale(1); filter: none; } 50% { transform: scale(1.35); filter: drop-shadow(0 0 4px #ff8a7a); } }
+@keyframes m-talk { from { transform: scaleY(.6); } to { transform: scaleY(1.9); } }
+@keyframes m-dial { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .mascot *, .mascot .m-body { animation: none !important; } }
 @media (prefers-reduced-motion: reduce) { .ambient::before, .ambient::after, .onair-orb { animation: none !important; } }

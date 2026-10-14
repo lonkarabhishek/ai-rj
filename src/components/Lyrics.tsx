@@ -48,7 +48,7 @@ export function Lyrics({ text, clock }: { text: string; clock: () => [number, nu
               const active = i === lineIdx && x.start <= at && x.end > at;
               return (
                 <span key={j} className={`transition-colors duration-200 ${spoken ? "text-white" : "text-white/45"}`}
-                  style={active ? { textShadow: "0 0 18px rgba(232,121,249,.85), 0 0 2px rgba(255,255,255,.9)" } : undefined}>
+                  style={active ? { textShadow: "0 0 18px rgba(127,224,192,.7), 0 0 2px rgba(255,255,255,.9)" } : undefined}>
                   {x.w}{" "}
                 </span>
               );

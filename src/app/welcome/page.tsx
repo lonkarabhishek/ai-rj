@@ -1,4 +1,5 @@
 "use client";
+import { Mascot } from "@/components/Mascot";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { EnergyPicker, HumorPicker, LanguagePicker, ModePicker, MusicImport, NameFields, SpotifyConnect, TopicsEditor, VoicePicker, usePrefs } from "@/components/prefs";
@@ -45,7 +46,7 @@ function Flow() {
 
       <div key={step} className="fade-up flex flex-1 flex-col">
         <div className={cx(step === "welcome" ? "mt-[8svh] sm:mt-[18vh]" : "mt-6", "mb-8")}>
-          {step === "welcome" && <div className="breathe mb-8 h-16 w-16 orb-tile rounded-2xl" />}
+          {step === "welcome" && <Mascot className="mb-6 h-20 w-20" />}
           <h1 className="whitespace-pre-line text-[28px] font-semibold sm:text-[32px] leading-[1.1] tracking-tight">{COPY[step].title}</h1>
           <p className="mt-3 text-[15px] leading-relaxed text-zinc-400">{COPY[step].sub}</p>
         </div>

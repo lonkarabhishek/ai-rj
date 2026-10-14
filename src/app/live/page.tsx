@@ -8,6 +8,7 @@ import { Curator, getMe, getToken, getTokenInfo, sp, SpotifyError } from "@/lib/
 import { AllPrefs, usePrefs } from "@/components/prefs";
 import { cx, Spinner } from "@/components/ui";
 import { Lyrics } from "@/components/Lyrics";
+import { Mascot } from "@/components/Mascot";
 
 const SILENT_WAV = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
 declare global { interface Window { Spotify: any; onSpotifyWebPlaybackSDKReady: () => void } }
@@ -695,7 +696,7 @@ function LiveInner() {
             <div className={cx("aspect-square w-[min(64vw,280px,30svh)] overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)] transition-transform duration-700", speaking || phase === "rj" ? "scale-[0.72]" : phase === "song" ? "scale-100" : "scale-[0.94]")}>
               {art ? <img key={art} src={art} alt="" className="fade-up h-full w-full object-cover" /> : (
                 <div className="stage-card relative flex h-full w-full items-center justify-center">
-                  <div className={cx("onair-orb", live && "is-live", phase === "rj" && "is-talking")} />
+                  <Mascot state={phase === "rj" || speaking ? "talking" : live ? "live" : "idle"} className="w-[62%]" />
                   <span className="absolute bottom-4 text-[10px] font-medium uppercase tracking-[0.28em] text-[#f3efe8]/45">{phase === "rj" ? "On air" : live ? "Live" : "MyRJ FM"}</span>
                   {(phase === "tuning" || phase === "recovering") && <Spinner className="absolute h-6 w-6" />}
                 </div>
@@ -703,8 +704,8 @@ function LiveInner() {
             </div>
             {(phase === "rj" || speaking) && (
               <div className="glass absolute -bottom-4 left-1/2 flex -translate-x-1/2 items-end gap-[3px] rounded-full px-3.5 py-2">
-                {[0, 1, 2, 3, 4].map((b) => <span key={b} className="w-[3px] origin-bottom animate-[eq_0.9s_ease-in-out_infinite] rounded-full bg-[#f5c48a]" style={{ animationDelay: `${b * 0.12}s`, height: 12 }} />)}
-                <span className="ml-2 text-[11px] font-medium">{rjName}</span>
+                {[0, 1, 2, 3, 4].map((b) => <span key={b} className="w-[3px] origin-bottom animate-[eq_0.9s_ease-in-out_infinite] rounded-full bg-[#7fe0c0]" style={{ animationDelay: `${b * 0.12}s`, height: 12 }} />)}
+                <span className="ml-2 whitespace-nowrap text-[11px] font-medium">{rjName}</span>
               </div>
             )}
           </div>
@@ -747,7 +748,7 @@ function LiveInner() {
 
         <div className="flex items-center gap-3">
           {!live ? (
-            <button onClick={goLive} className="h-14 w-full rounded-full bg-[#f3efe8] text-[17px] sm:h-16 font-semibold text-black shadow-[0_12px_44px_-12px_rgba(240,180,110,0.45)] transition active:scale-[0.97]">Go Live</button>
+            <button onClick={goLive} className="h-14 w-full rounded-full bg-[#f3efe8] text-[17px] sm:h-16 font-semibold text-black shadow-[0_12px_44px_-14px_rgba(255,138,122,0.4)] transition active:scale-[0.97]">Go Live</button>
           ) : (
             <>
               <button onClick={() => stop("Off air. Tap Go Live to tune back in.")} className="glass flex h-14 w-14 shrink-0 items-center sm:h-16 sm:w-16 justify-center rounded-full active:scale-95" aria-label="Stop">
