@@ -112,8 +112,18 @@ const MODE_QUERIES: Record<Exclude<ListenMode, "default">, string[]> = {
   focus: ["lofi beats", "instrumental focus", "deep focus", "piano focus", "ambient study", "lofi hindi instrumental", "chillhop"],
 };
 
+/** Find the best Spotify match for a title/artist pair. */
+export async function matchTrack(title: string, artist: string): Promise<TrackInfo | null> {
+  const q = artist ? `track:${title} artist:${artist}` : title;
+  try {
+    let j = await sp<any>(`/search?type=track&limit=3&q=${encodeURIComponent(q)}`);
+    if (!j.tracks?.items?.length && artist) j = await sp<any>(`/search?type=track&limit=3&q=${encodeURIComponent(`${title} ${artist}`)}`);
+    return toTrack(j.tracks?.items?.[0]);
+  } catch { return null; }
+}
+
 export class Curator {
-  constructor(private mode: ListenMode = "default") {}
+  constructor(private mode: ListenMode = "default", private seeds: TrackInfo[] = []) {}
   private played = new Set<string>();
   private queue: TrackInfo[] = [];
   private pools: Record<string, TrackInfo[]> = {};
@@ -142,12 +152,16 @@ export class Curator {
       }),
       sp<any>("/me/top/artists?limit=20&time_range=medium_term").then((j) => j.items ?? []).catch(() => []),
     ]);
-    this.pools = { top: [...s, ...m, ...l], saved, playlists: pls };
+    this.pools = { top: [...s, ...m, ...l], saved, playlists: pls, seeds: this.seeds };
     this.artists = artists.map((a: any) => ({ id: a.id, name: a.name, genres: a.genres ?? [] }));
   }
 
   private async discovery(): Promise<TrackInfo[]> {
-    if (!this.artists.length) return [];
+    // imported taste seeds guide discovery too: search their artists
+    const seedArtists = [...new Set(this.seeds.map((t) => t.artists.split(",")[0].trim()))].sort(() => Math.random() - 0.5).slice(0, 2);
+    const viaSeeds = (await Promise.all(seedArtists.map((a) => this.safe(async () =>
+      this.map((await sp<any>(`/search?type=track&limit=10&q=${encodeURIComponent(`artist:${a}`)}`)).tracks?.items ?? []))))).flat();
+    if (!this.artists.length) return viaSeeds;
     const shuffled = [...this.artists].sort(() => Math.random() - 0.5).slice(0, 3);
     const results = await Promise.all(shuffled.map(async (a) => {
       const viaTop = await this.safe(async () => this.map((await sp<any>(`/artists/${a.id}/top-tracks?market=from_token`)).tracks ?? []));
@@ -156,7 +170,7 @@ export class Curator {
       const viaSearch = await this.safe(async () => this.map((await sp<any>(`/search?type=track&limit=20&offset=${Math.floor(Math.random() * 100)}&q=${encodeURIComponent(q)}`)).tracks?.items ?? []));
       return [...viaTop.slice(0, 4), ...viaSearch];
     }));
-    return results.flat();
+    return [...viaSeeds, ...results.flat()];
   }
 
   private take(pool: TrackInfo[] | undefined, n: number) {
@@ -186,7 +200,7 @@ export class Curator {
       const modeT = await this.modeTracks();
       const batch = this.mode === "focus"
         ? this.take(modeT, 12) // focus: only instrumental-style tracks, no lyrics-heavy favourites
-        : [...this.take(modeT, 8), ...this.take(this.pools.top, 2), ...this.take(this.pools.saved, 2)].sort(() => Math.random() - 0.5);
+        : [...this.take(modeT, 8), ...this.take(this.pools.top, 2), ...this.take(this.pools.saved, 1), ...this.take(this.pools.seeds, 1)].sort(() => Math.random() - 0.5);
       if (!batch.length) batch.push(...this.take(this.pools.top, 6), ...this.take(this.pools.saved, 6)); // mode search failed: fall back to favourites
       this.queue.push(...batch);
       if (!batch.length && this.played.size) this.played.clear();
@@ -195,7 +209,8 @@ export class Curator {
     const disc = await this.discovery();
     // Interleave: familiar favourites with ~1/3 discovery.
     const batch = [
-      ...this.take(this.pools.top, 4), ...this.take(this.pools.saved, 3),
+      ...this.take(this.pools.seeds, this.seeds.length ? 3 : 0),
+      ...this.take(this.pools.top, this.seeds.length ? 3 : 4), ...this.take(this.pools.saved, 3),
       ...this.take(this.pools.playlists, 3), ...this.take(disc, 5),
     ].sort(() => Math.random() - 0.5);
     // Avoid two songs by the same artist back to back.

@@ -14,6 +14,7 @@ export interface Prefs {
   source: "top" | string; // "top" or a Spotify playlist id
   externalPlaylists: { url: string; note?: string; addedAt: string }[];
   onboarded: boolean;
+  tasteSeeds: TrackInfo[]; // songs imported from screenshots/links/lists, matched on Spotify
   defaultMode: ListenMode;
 }
 
@@ -28,6 +29,7 @@ export const DEFAULT_PREFS: Prefs = {
   source: "top",
   externalPlaylists: [],
   onboarded: false,
+  tasteSeeds: [],
   defaultMode: "default",
 };
 

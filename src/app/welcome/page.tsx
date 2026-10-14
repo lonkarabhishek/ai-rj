@@ -1,7 +1,7 @@
 "use client";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
-import { EnergyPicker, HumorPicker, LanguagePicker, ModePicker, NameFields, SpotifyConnect, TopicsEditor, VoicePicker, usePrefs } from "@/components/prefs";
+import { EnergyPicker, HumorPicker, LanguagePicker, ModePicker, MusicImport, NameFields, SpotifyConnect, TopicsEditor, VoicePicker, usePrefs } from "@/components/prefs";
 import { Button, cx } from "@/components/ui";
 
 const STEPS = ["welcome", "names", "language", "voice", "energy", "humor", "news", "spotify", "mode"] as const;
@@ -56,7 +56,15 @@ function Flow() {
           {step === "energy" && <EnergyPicker p={p} up={up} />}
           {step === "humor" && <HumorPicker p={p} up={up} />}
           {step === "news" && <TopicsEditor p={p} up={up} />}
-          {step === "spotify" && <SpotifyConnect returnTo="/welcome?step=spotify" />}
+          {step === "spotify" && (
+            <div className="space-y-8">
+              <SpotifyConnect returnTo="/welcome?step=spotify" />
+              <div className="space-y-2">
+                <p className="text-sm text-zinc-400">Also listen elsewhere? Drop screenshots or a playlist link and MyRJ will learn your taste.</p>
+                <MusicImport p={p} up={up} />
+              </div>
+            </div>
+          )}
           {step === "mode" && <ModePicker value={p.defaultMode} onChange={(m) => up("defaultMode", m)} />}
         </div>
       </div>

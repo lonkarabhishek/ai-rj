@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 import { useEffect, useRef, useState } from "react";
-import { DEFAULT_PREFS, ENERGIES, HUMORS, LANGUAGES, MODES, loadPrefs, savePrefs, type Prefs } from "@/lib/prefs";
+import { DEFAULT_PREFS, ENERGIES, HUMORS, LANGUAGES, MODES, loadPrefs, savePrefs, type Prefs, type TrackInfo } from "@/lib/prefs";
 import { getMe } from "@/lib/spotifyClient";
 import { Chip, Section, Spinner, cx, inputCls } from "./ui";
 
@@ -231,7 +231,91 @@ export function AllPrefs({ p, up, compact, returnTo }: { p: Prefs; up: Up; compa
       <Section title="News" hint="Only these topics make it on air."><TopicsEditor p={p} up={up} /></Section>
       <Section title="Default mode"><ModePicker value={p.defaultMode} onChange={(m) => up("defaultMode", m)} /></Section>
       <Section title="Spotify"><SpotifyConnect returnTo={returnTo} /></Section>
-      <Section title="Other playlists" hint="Saved for reference. Only Spotify plays for now."><ExternalPlaylists p={p} up={up} /></Section>
+      <Section title="Add your music from anywhere" hint="Screenshots from YouTube Music, Apple Music, JioSaavn, a playlist link, or a typed list. MyRJ finds them on Spotify and leans your radio towards them."><MusicImport p={p} up={up} /></Section>
+    </div>
+  );
+}
+
+async function shrink(file: File): Promise<string> {
+  const url = URL.createObjectURL(file);
+  const img = await new Promise<HTMLImageElement>((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+  const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
+  const c = document.createElement("canvas");
+  c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+  c.getContext("2d")!.drawImage(img, 0, 0, c.width, c.height);
+  URL.revokeObjectURL(url);
+  return c.toDataURL("image/jpeg", 0.8);
+}
+
+/** "Add your music from anywhere": screenshots, links or a typed list -> Claude -> Spotify matches -> taste seeds. */
+export function MusicImport({ p, up }: { p: Prefs; up: Up }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function run(files: File[] = []) {
+    if (!files.length && !text.trim()) { fileRef.current?.click(); return; }
+    setMsg(""); setBusy(files.length ? "Reading your screenshots…" : "Reading…");
+    try {
+      const images = await Promise.all(files.slice(0, 6).map(shrink));
+      const r = await fetch("/api/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ images, text }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error ?? "Import failed");
+      const songs = j.songs as { title: string; artist: string }[];
+      if (!songs.length) { setMsg("Couldn't spot any songs there. Try a clearer screenshot or a list."); return; }
+      setBusy(`Found ${songs.length} songs. Matching on Spotify…`);
+      const { matchTrack } = await import("@/lib/spotifyClient");
+      const matched: TrackInfo[] = [];
+      for (let i = 0; i < songs.length; i += 5) {
+        const batch = await Promise.all(songs.slice(i, i + 5).map((s) => matchTrack(s.title, s.artist)));
+        matched.push(...(batch.filter(Boolean) as TrackInfo[]));
+        setBusy(`Matching on Spotify… ${Math.min(i + 5, songs.length)}/${songs.length}`);
+      }
+      const have = new Set(p.tasteSeeds.map((t) => t.uri));
+      const fresh = matched.filter((t) => t.uri && !have.has(t.uri) && (have.add(t.uri!), true));
+      up("tasteSeeds", [...fresh, ...p.tasteSeeds].slice(0, 300));
+      setText("");
+      setMsg(matched.length ? `Added ${fresh.length} song${fresh.length === 1 ? "" : "s"}${matched.length - fresh.length ? ` (${matched.length - fresh.length} already there)` : ""}. Your radio will lean into these.` : "Found songs, but couldn't match them on Spotify. Is Spotify connected?");
+    } catch (e) { setMsg(String(e instanceof Error ? e.message : e)); }
+    finally { setBusy(""); }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => { e.preventDefault(); run([...e.dataTransfer.files].filter((f) => f.type.startsWith("image/"))); }}
+        onPaste={(e) => { const f = [...e.clipboardData.files].filter((x) => x.type.startsWith("image/")); if (f.length) { e.preventDefault(); run(f); } }}
+        className="rounded-2xl border border-dashed border-white/15 p-4">
+        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2}
+          placeholder="Paste a playlist link, or type songs (one per line). Or drop/paste screenshots here."
+          className="w-full resize-none bg-transparent text-[15px] placeholder:text-zinc-600 outline-none" />
+        <div className="mt-2 flex items-center gap-2">
+          <button onClick={() => fileRef.current?.click()} disabled={!!busy} className="h-10 rounded-full border border-white/10 px-4 text-sm text-zinc-300 hover:border-white/25 disabled:opacity-40">📷 Screenshots</button>
+          <button onClick={() => run()} disabled={!!busy || !text.trim()} className="h-10 rounded-full bg-white px-5 text-sm font-medium text-black disabled:opacity-30">Add songs</button>
+          <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { run([...(e.target.files ?? [])]); e.target.value = ""; }} />
+        </div>
+      </div>
+      {busy && <div className="flex items-center gap-2 text-sm text-zinc-400"><Spinner /> {busy}</div>}
+      {msg && !busy && <p className="text-sm text-zinc-400">{msg}</p>}
+      {p.tasteSeeds.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between text-xs text-zinc-500">
+            <span>{p.tasteSeeds.length} songs shaping your radio</span>
+            <button className="hover:text-white" onClick={() => up("tasteSeeds", [])}>Clear all</button>
+          </div>
+          <div className="max-h-64 space-y-1 overflow-y-auto no-scrollbar">
+            {p.tasteSeeds.map((t) => (
+              <div key={t.uri} className="flex items-center gap-3 rounded-xl px-1 py-1">
+                {t.image ? <img src={t.image} alt="" className="h-9 w-9 rounded-md" /> : <div className="h-9 w-9 rounded-md bg-white/10" />}
+                <div className="min-w-0 flex-1"><div className="truncate text-sm">{t.name}</div><div className="truncate text-xs text-zinc-500">{t.artists}</div></div>
+                <button className="px-2 text-zinc-600 hover:text-white" aria-label="Remove" onClick={() => up("tasteSeeds", p.tasteSeeds.filter((x) => x.uri !== t.uri))}>✕</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
