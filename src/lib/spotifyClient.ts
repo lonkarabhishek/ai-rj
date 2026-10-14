@@ -159,13 +159,14 @@ export class Curator {
     this.langs = langs.filter((l) => l !== "any") as Exclude<SongLang, "any">[];
   }
   private genreCache = new Map<string, string[]>();
+  private genresDown = false; // Spotify refused artist lookups (dev-mode restrictions): genre signal unavailable
   private async genresFor(tracks: TrackInfo[]) {
     const ids = [...new Set(tracks.map((t) => t.artistIds?.[0]).filter((x): x is string => !!x && !this.genreCache.has(x)))];
     for (let i = 0; i < ids.length; i += 50) {
       try {
         const j = await sp<any>(`/artists?ids=${ids.slice(i, i + 50).join(",")}`);
         for (const a of j.artists ?? []) if (a) this.genreCache.set(a.id, a.genres ?? []);
-      } catch { ids.slice(i, i + 50).forEach((x) => this.genreCache.set(x, [])); }
+      } catch { this.genresDown = true; ids.slice(i, i + 50).forEach((x) => this.genreCache.set(x, [])); }
     }
   }
   /** Keep tracks matching the chosen song languages. trusted = came from a language search (keep when undetectable). */
@@ -182,6 +183,7 @@ export class Curator {
       if (found.has("hindi") && /marathi|lavani/i.test(gs)) found.add("marathi");
       if (this.langs.some((l) => found.has(l))) return true;
       if (this.langs.includes("english") && !found.size && !INDIC_RE.test(gs) && !/[\u0900-\u0DFF]/.test(text)) return g.length > 0 || trusted;
+      if (this.genresDown && !found.size && !g.length) return true; // can't tell: don't drop the listener's own songs
       return trusted && !found.size && !g.length; // no signal at all: only trust language-search results
     });
   }
@@ -211,10 +213,13 @@ export class Curator {
   }
   private map(items: any[]) { return items.map(toTrack).filter(Boolean) as TrackInfo[]; }
   private async search(q: string, limit = 20, maxOffset = 60): Promise<any[]> {
-    try {
-      const off = maxOffset ? Math.floor(Math.random() * maxOffset) : 0;
-      return (await sp<any>(`/search?type=track&limit=${limit}&offset=${off}&q=${encodeURIComponent(q)}`)).tracks?.items ?? [];
-    } catch { return []; }
+    // Spotify now caps search at limit=10 for most apps (larger limits are rejected): page in chunks of 10.
+    const off = maxOffset ? Math.floor(Math.random() * maxOffset) : 0;
+    const pages = await Promise.all(Array.from({ length: Math.ceil(limit / 10) }, (_, i) =>
+      sp<any>(`/search?type=track&limit=10&offset=${off + i * 10}&q=${encodeURIComponent(q)}`).then((j) => j.tracks?.items ?? []).catch(() => [])));
+    let items = pages.flat();
+    if (!items.length && off) items = await sp<any>(`/search?type=track&limit=10&q=${encodeURIComponent(q)}`).then((j) => j.tracks?.items ?? []).catch(() => []);
+    return items;
   }
 
   /** Strict instrumental filter for Focus: audio-features if Spotify allows it, else text + artist-genre signals. Unsure = out. */
@@ -284,7 +289,7 @@ export class Curator {
       const viaTop = await this.safe(async () => this.map((await sp<any>(`/artists/${a.id}/top-tracks?market=from_token`)).tracks ?? []));
       const genre = a.genres[Math.floor(Math.random() * a.genres.length)];
       const q = genre ? `genre:"${genre}"` : a.name;
-      const viaSearch = await this.safe(async () => this.map((await sp<any>(`/search?type=track&limit=20&offset=${Math.floor(Math.random() * 100)}&q=${encodeURIComponent(q)}`)).tracks?.items ?? []));
+      const viaSearch = await this.safe(async () => this.map((await sp<any>(`/search?type=track&limit=10&offset=${Math.floor(Math.random() * 100)}&q=${encodeURIComponent(q)}`)).tracks?.items ?? []));
       return [...viaTop.slice(0, 4), ...viaSearch];
     }));
     return [...viaSeeds, ...results.flat()];
@@ -363,9 +368,16 @@ export class Curator {
     for (let tries = 0; this.queue.length < 3 && tries < 3; tries++) {
       try { await this.refill(); } catch { await new Promise((r) => setTimeout(r, 1500)); }
     }
+    if (!this.queue.length) {
+      // Never block start: the language filter (or every search) came up empty, so relax it and play favourites.
+      const relaxed = [...this.take(this.pools.top, 6), ...this.take(this.pools.saved, 4), ...this.take(this.pools.seeds, 3), ...this.take(this.pools.playlists, 3)];
+      this.queue.push(...relaxed.sort(() => Math.random() - 0.5));
+      if (relaxed.length) this.relaxed = true;
+    }
     const t = this.queue.shift() ?? null;
     if (t?.uri) this.played.add(t.uri);
     return t;
   }
+  relaxed = false;
   peek() { return this.queue[0] ?? null; }
 }
