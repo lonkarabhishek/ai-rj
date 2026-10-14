@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import type React from "react";
 import { cx } from "./ui";
 
 type State = "idle" | "live" | "talking";
@@ -19,6 +20,24 @@ export function Mascot({ state = "idle", className, getLevel }: { state?: State;
   const tipRef = useRef<SVGCircleElement>(null);
   const stateRef = useRef(state); stateRef.current = state;
   const levelRef = useRef(getLevel); levelRef.current = getLevel;
+  const [hover, setHover] = useState(false);
+  const boopRef = useRef({ t0: -1e9, dx: 0, dy: 0, amp: 0, giggle: false });
+  const tapsRef = useRef<number[]>([]);
+  const happyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  function boop(e: React.PointerEvent<SVGSVGElement>) {
+    e.stopPropagation(); // never reaches page-level handlers (Go Live etc.)
+    const now = performance.now();
+    tapsRef.current = [...tapsRef.current.filter((x) => now - x < 2000), now].slice(-6);
+    const giggle = tapsRef.current.length >= 3;
+    if (now - boopRef.current.t0 < 120) return; // de-spam
+    const r = e.currentTarget.getBoundingClientRect();
+    const dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2), d = Math.hypot(dx, dy) || 1;
+    boopRef.current = { t0: now, dx: dx / d, dy: dy / d, amp: giggle ? 0.09 : 0.06, giggle };
+    try { navigator.vibrate?.(giggle ? [8, 40, 8] : 8); } catch { /* unsupported */ }
+    clearTimeout(happyTimer.current);
+    setBlink(false); setHappy(true);
+    happyTimer.current = setTimeout(() => { setHappy(false); setBlink(true); setTimeout(() => setBlink(false), 130); }, 600);
+  }
 
   // random blinks (calm), occasional happy squint while talking
   useEffect(() => {
@@ -65,8 +84,16 @@ export function Mascot({ state = "idle", className, getLevel }: { state?: State;
       }
       lvl = lerp(lvl, Math.min(1, target), target > lvl ? 0.35 : 0.12);
       ex = lerp(ex, tx, 0.08); ey = lerp(ey, ty - lvl * 1.6, 0.12);
-      const sy = 1 + lvl * 0.04, sx = 1 - lvl * 0.025;
-      voiceRef.current?.setAttribute("transform", `translate(60 94) scale(${sx.toFixed(4)} ${sy.toFixed(4)}) translate(-60 -94)`);
+      let sy = 1 + lvl * 0.04, sx = 1 - lvl * 0.025, bx = 0, by = 0, rot = 0;
+      const b = boopRef.current, bt = (now - b.t0) / 1000;
+      if (bt < 1.2) {
+        const sp = b.amp * Math.exp(-bt * 6) * Math.cos(bt * 24); // spring: squash then wobble back
+        const ax = Math.abs(b.dx), ay = Math.abs(b.dy);
+        sx *= 1 - sp * ax + sp * ay * 0.5; sy *= 1 - sp * ay + sp * ax * 0.5;
+        bx = b.dx * sp * 40; by = b.dy * sp * 40;
+        if (b.giggle) rot = Math.sin(bt * 30) * 7 * Math.exp(-bt * 4);
+      }
+      voiceRef.current?.setAttribute("transform", `translate(${bx.toFixed(2)} ${by.toFixed(2)}) rotate(${rot.toFixed(2)} 60 64) translate(60 94) scale(${sx.toFixed(4)} ${sy.toFixed(4)}) translate(-60 -94)`);
       eyesRef.current?.setAttribute("transform", `translate(${ex.toFixed(2)} ${ey.toFixed(2)})`);
       if (tipRef.current) {
         tipRef.current.setAttribute("r", (3.4 + lvl * 1.6).toFixed(2));
@@ -79,7 +106,9 @@ export function Mascot({ state = "idle", className, getLevel }: { state?: State;
   }, []);
 
   return (
-    <svg ref={svgRef} viewBox="0 0 120 120" className={cx("mascot", `mascot-${state}`, blink && "is-blink", happy && "is-happy", className)} role="img" aria-label="MyRJ mascot">
+    <svg ref={svgRef} viewBox="0 0 120 120" className={cx("mascot cursor-pointer touch-manipulation select-none", `mascot-${state}`, blink && "is-blink", happy && "is-happy", hover && "is-hover", className)} role="img" aria-label="MyRJ mascot"
+      onPointerDown={boop} onClick={(e) => e.stopPropagation()}
+      onPointerEnter={(e) => e.pointerType === "mouse" && setHover(true)} onPointerLeave={() => setHover(false)}>
       <g className="m-body">
         <g ref={voiceRef}>
           <g transform="rotate(-15 60 64)">

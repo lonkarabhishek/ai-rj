@@ -68,6 +68,7 @@ body { font-family: var(--font-sans); letter-spacing: -0.005em; }
 .mascot { overflow: visible; shape-rendering: geometricPrecision; }
 .mascot .m-body { transform-origin: 60px 64px; transform-box: view-box; animation: m-sway 6.5s ease-in-out infinite; }
 .mascot .m-eyes { transform-origin: 78px 51px; transform-box: view-box; transition: transform .12s ease; }
+.mascot.is-hover .m-eyes { transform: scale(1.12); }
 .mascot.is-blink .m-eyes { transform: scaleY(.1); }
 .mascot.is-happy .m-eyes { transform: scaleY(.45) translateY(-1px); transition-duration: .25s; }
 @keyframes m-sway { 0%,100% { transform: translateY(0) rotate(0deg); } 50% { transform: translateY(-2.5px) rotate(-1.5deg); } }
