@@ -154,7 +154,7 @@ function templateInner(input: SegmentInput): string {
     const tl = trackLine(next);
     if (!tl) return "";
     if (mode === "gym" || mode === "focus") return pick(MODE_LINES[mode][k]).replace("{me}", prefs.listenerName).replace("{track}", tl);
-    return pick(UPNEXT[k]).replace("{t}", tl) + ".";
+    return ""; // never a bare "Up next: <song>": stay silent when Claude couldn't write a real line
   }
   return templateFull(input);
 }
@@ -298,7 +298,7 @@ export async function llmScript(input: SegmentInput): Promise<string | null> {
     input.recent?.length ? `Your recent breaks (do NOT repeat their openers, jokes or phrasing):\n- ${input.recent.slice(-4).join("\n- ")}` : "",
   ].filter(Boolean).join("\n");
   const clean = (t?: string | null) => t?.replace(/[*_#`]/g, "").replace(/^(\s*\[[a-z]+\]\s*)?["']/i, "$1").replace(/["']$/, "").replace(/\s+/g, " ").trim() || null;
-  const signal = AbortSignal.timeout(Number(process.env.LLM_TIMEOUT_MS ?? 6000));
+  const signal = AbortSignal.timeout(Number(process.env.LLM_TIMEOUT_MS ?? 8000));
 
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   if (anthropicKey) {

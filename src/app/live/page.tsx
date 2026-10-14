@@ -15,7 +15,7 @@ declare global { interface Window { Spotify: any; onSpotifyWebPlaybackSDKReady: 
 
 type Out = "sdk" | "connect" | "preview" | "none";
 type Phase = "idle" | "tuning" | "rj" | "song" | "waiting" | "recovering";
-interface Diag { account?: string; product?: string; scopes?: string; sdk?: string; device?: string; output?: string; error?: string; timings?: string; voice?: string; script?: string; audio?: string; log?: string[] }
+interface Diag { account?: string; product?: string; scopes?: string; sdk?: string; device?: string; output?: string; error?: string; timings?: string; breaks?: string; voice?: string; script?: string; audio?: string; log?: string[] }
 type BreakKind = "none" | "stinger" | "full" | "switch";
 interface Plan { kind: BreakKind; withNews?: boolean; withJoke?: boolean; vibeChanged?: boolean }
 interface Segment { script: string; audioUrl: string | null; lang: string; kind: BreakKind }
@@ -83,6 +83,7 @@ function LiveInner() {
   const chanRef = useRef<BroadcastChannel | null>(null);
   const tabId = useRef(Math.random().toString(36).slice(2));
   const speechUnlockedRef = useRef(false);
+  const breaksRef = useRef<string[]>([]);
   const [boot, setBoot] = useState<{ step: string; label: string; since: number } | null>(null);
   const bootStep = (step: string, label: string) => setBoot((b) => (b?.label === label ? b : { step, label, since: b?.step === step ? b.since : Date.now() }));
 
@@ -196,7 +197,10 @@ function LiveInner() {
     }[m];
     let kind: BreakKind = r < cfg.none ? "none" : r < cfg.none + cfg.stinger ? "stinger" : "full";
     if (kind === "none" && since >= cfg.maxGap) kind = m === "gym" || m === "focus" ? "stinger" : "full";
-    if ((m === "gym" || m === "focus") && kind === "full") kind = "stinger";
+    if ((m === "gym" || m === "focus") && kind === "full" && outRef.current === "sdk") kind = "stinger";
+    // Talk-over stingers only work in the in-browser player (we can duck the song). On a phone / Spotify Connect a stinger
+    // would be a lone "here's <song>" line before the track, so make it a real break instead (Focus stays quiet).
+    if (kind === "stinger" && outRef.current !== "sdk") kind = m === "focus" ? (since >= cfg.maxGap ? "stinger" : "none") : "full";
     if (kind === "none") return { kind };
     sinceTalkRef.current = 0;
     const newsDue = Date.now() - lastNewsRef.current > 22 * 60 * 1000;
@@ -386,6 +390,8 @@ function LiveInner() {
         body: JSON.stringify({ prefs: p, next, prev, index, mode: modeRef.current, recent: recentRef.current.slice(-4), hour: new Date().getHours(), kind: plan.kind, withNews: !!plan.withNews, withJoke: !!plan.withJoke, vibeChanged: !!plan.vibeChanged }),
       }).then(async (r) => { if (!r.ok) throw new Error(`segment ${r.status} ${(await r.text().catch(() => "")).slice(0, 120)}`); return r.json(); }), 20000, "segment");
       setDiag({ script: `${seg.mode ?? "?"} ok` });
+      breaksRef.current = [...breaksRef.current, `${plan.kind}:${!seg.script ? "skip" : seg.mode === "llm" ? "claude" : "template"}`].slice(-6);
+      setDiag({ breaks: breaksRef.current.join(" · ") });
       if (!seg.script) { log(`RJ chose silence (${plan.kind})`); return null; }
       recentRef.current.push(seg.script);
       if (plan.withNews && seg.headlines?.length) lastNewsRef.current = Date.now();
@@ -831,6 +837,7 @@ function LiveInner() {
               <dt>scopes</dt><dd>{diag.scopes ?? "-"}</dd>
               <dt>web player</dt><dd>{diag.sdk ?? "-"}</dd>
               <dt>device</dt><dd>{diag.device ?? "-"}</dd>
+              <dt>breaks</dt><dd className="break-words">{diag.breaks ?? "-"}</dd>
               <dt>rj script</dt><dd className={cx("break-words", diag.script?.startsWith("failed") && "text-red-300")}>{diag.script ?? "-"}</dd>
               <dt>rj voice</dt><dd className={cx("break-words", diag.voice?.startsWith("failed") && "text-red-300")}>{diag.voice ?? "-"}</dd>
               <dt>audio</dt><dd className={cx("break-words", diag.audio && diag.audio !== "ok" && "text-red-300")}>{diag.audio ?? "-"}</dd>
