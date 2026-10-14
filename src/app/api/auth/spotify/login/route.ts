@@ -8,10 +8,12 @@ export async function GET(req: Request) {
   const target = new URL(redirectUri);
   const host = req.headers.get("host") ?? new URL(req.url).host;
   // Cookies are per-host: keep the whole flow on the redirect URI's host (e.g. 127.0.0.1 vs localhost).
-  if (host !== target.host) return NextResponse.redirect(`${target.origin}/api/auth/spotify/login`);
+  if (host !== target.host) return NextResponse.redirect(`${target.origin}/api/auth/spotify/login${new URL(req.url).search}`);
   const state = randomBytes(16).toString("hex");
   const q = new URLSearchParams({ response_type: "code", client_id: process.env.SPOTIFY_CLIENT_ID, scope: SCOPES, redirect_uri: redirectUri, state });
   const res = NextResponse.redirect(`https://accounts.spotify.com/authorize?${q}`);
+  const ret = new URL(req.url).searchParams.get("return");
+  if (ret && /^\/[a-z0-9/_?=&-]*$/i.test(ret)) res.cookies.set("sp_return", ret, { ...cookieOpts(), maxAge: 600 });
   res.cookies.set("sp_state", state, { ...cookieOpts(), maxAge: 600 });
   return res;
 }

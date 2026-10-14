@@ -11,7 +11,9 @@ export async function GET(req: NextRequest) {
   }
   try {
     const t = await tokenRequest({ grant_type: "authorization_code", code, redirect_uri: process.env.SPOTIFY_REDIRECT_URI! });
-    const res = NextResponse.redirect(`${origin}/settings?spotify=connected`);
+    const back = req.cookies.get("sp_return")?.value ?? "/settings";
+    const res = NextResponse.redirect(`${origin}${back}${back.includes("?") ? "&" : "?"}spotify=connected`);
+    res.cookies.delete("sp_return");
     res.cookies.delete("sp_state");
     res.cookies.set("sp_at", t.access_token, { ...cookieOpts(), maxAge: t.expires_in - 60 });
     res.cookies.set("sp_scope", (t as { scope?: string }).scope ?? "", { ...cookieOpts(), maxAge: 60 * 60 * 24 * 60 });
