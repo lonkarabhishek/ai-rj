@@ -1,5 +1,5 @@
 // Server-side readers for playlist links. YouTube/YouTube Music are parsed directly (no LLM needed).
-export interface Song { title: string; artist: string }
+export interface Song { title: string; artist: string; videoId?: string; seconds?: number }
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36";
 
@@ -50,12 +50,12 @@ export async function readYoutubePlaylist(listId: string): Promise<Song[]> {
         if (rec.playlistVideoRenderer) {
           const v = rec.playlistVideoRenderer;
           const s = toSong(v.title?.runs?.[0]?.text ?? v.title?.simpleText ?? "", v.shortBylineText?.runs?.[0]?.text ?? "");
-          if (s) songs.push(s);
+          if (s) songs.push({ ...s, videoId: v.videoId, seconds: Number(v.lengthSeconds) || undefined });
         } else if (rec.lockupViewModel && JSON.stringify(rec.lockupViewModel).includes(listId)) {
           const md = rec.lockupViewModel.metadata?.lockupMetadataViewModel;
           const rows = md?.metadata?.contentMetadataViewModel?.metadataRows ?? [];
           const s = toSong(md?.title?.content ?? "", rows[0]?.metadataParts?.[0]?.text?.content ?? "");
-          if (s) songs.push(s);
+          if (s) songs.push({ ...s, videoId: rec.lockupViewModel.contentId });
         } else Object.values(rec).forEach(walk);
       };
       walk(data);
@@ -69,7 +69,7 @@ export async function readYoutubePlaylist(listId: string): Promise<Song[]> {
       for (const e of xml.split("<entry>").slice(1)) {
         const dec = (x = "") => x.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
         const s = toSong(dec(e.match(/<title>([^<]*)<\/title>/)?.[1]), dec(e.match(/<author>\s*<name>([^<]*)<\/name>/)?.[1]));
-        if (s) songs.push(s);
+        if (s) songs.push({ ...s, videoId: e.match(/<yt:videoId>([^<]*)</)?.[1] });
       }
     }
   } catch { /* ignore */ }

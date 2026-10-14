@@ -19,6 +19,7 @@ export interface Prefs {
   vibe?: string; // retired feature; old saved values are ignored
   songLangs: SongLang[]; // song language(s) for curation; ["any"] = no filter. Separate from the RJ's speaking language.
   talk: { news: boolean; jokes: boolean; facts: boolean };
+  music: "spotify" | "youtube"; // playback source
   justMusic: boolean; // RJ keeps to minimal intros (silent in Focus)
 }
 
@@ -38,6 +39,7 @@ export const DEFAULT_PREFS: Prefs = {
   songLangs: ["any"],
   talk: { news: true, jokes: true, facts: true },
   justMusic: false,
+  music: "spotify",
 };
 export type SongLang = "any" | "hindi" | "english" | "punjabi" | "marathi" | "tamil" | "telugu";
 export const SONG_LANGS: { id: SongLang; label: string }[] = [
@@ -84,6 +86,7 @@ export interface TrackInfo {
   artists: string;
   uri?: string;
   durationMs?: number;
+  ytId?: string; // YouTube video id when the track plays from YouTube
   previewUrl?: string | null;
   spotifyUrl?: string;
   image?: string;

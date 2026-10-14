@@ -5,7 +5,8 @@ import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { isOnboarded, loadPrefs, MODES, savePrefs, type ListenMode, type Prefs, type TrackInfo } from "@/lib/prefs";
 import { clearSpotifyBackoff, Curator, getMe, limitedEndpoint, quotaExceeded, getToken, getTokenInfo, sp, spotifyBackoffMs, SpotifyError } from "@/lib/spotifyClient";
-import { AllPrefs, SongLangPicker, TalkToggles, usePrefs } from "@/components/prefs";
+import { AllPrefs, MusicSourcePicker, SongLangPicker, TalkToggles, usePrefs } from "@/components/prefs";
+import { YtCurator, YtPlayer, ytConnected, type YtState } from "@/lib/ytClient";
 import { cx, Spinner } from "@/components/ui";
 import { Lyrics } from "@/components/Lyrics";
 import { Mascot } from "@/components/Mascot";
@@ -13,7 +14,8 @@ import { Mascot } from "@/components/Mascot";
 const SILENT_WAV = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
 declare global { interface Window { Spotify: any; onSpotifyWebPlaybackSDKReady: () => void } }
 
-type Out = "sdk" | "connect" | "preview" | "none";
+type Out = "sdk" | "connect" | "youtube" | "preview" | "none";
+type AnyCurator = { next(): Promise<TrackInfo | null>; peek(): TrackInfo | null };
 type Phase = "idle" | "tuning" | "rj" | "song" | "waiting" | "recovering";
 interface Diag { account?: string; product?: string; scopes?: string; sdk?: string; device?: string; output?: string; error?: string; timings?: string; breaks?: string; voice?: string; script?: string; audio?: string; log?: string[] }
 type BreakKind = "none" | "stinger" | "full" | "switch";
@@ -80,7 +82,15 @@ function LiveInner() {
   const blockedRef = useRef<(() => void) | null>(null); // a clip the browser blocked; retried on the next tap
   const modeRef = useRef<ListenMode>("default");
   const outRef = useRef<Out>("none");
-  const curatorRef = useRef<Curator | null>(null);
+  const curatorRef = useRef<AnyCurator | null>(null);
+  const ytRef = useRef<YtPlayer | null>(null);
+  const ytHostRef = useRef<HTMLDivElement | null>(null);
+  const ytSelfAtRef = useRef(0); // last time WE paused/stopped the YouTube player (to tell external pauses apart)
+  const yt = () => (ytRef.current ??= new YtPlayer());
+  const canDuck = () => outRef.current === "sdk" || outRef.current === "youtube";
+  const mkCurator = (m: ListenMode): AnyCurator => outRef.current === "youtube"
+    ? new YtCurator(m, loadPrefs().songLangs, (loadPrefs().externalPlaylists ?? []).map((x) => x.url))
+    : new Curator(m, loadPrefs().tasteSeeds ?? [], loadPrefs().songLangs);
   const recentRef = useRef<string[]>([]);
   const ttsQuotaRef = useRef(false);
   const lastNewsRef = useRef(0);
@@ -203,6 +213,13 @@ function LiveInner() {
     return () => window.removeEventListener("keydown", onKey);
   }, [now, phase, prefs.rjName]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (prefs.music !== "youtube" || !ytHostRef.current) return;
+    yt().mount(ytHostRef.current).then(() => {
+      try { const c = JSON.parse(localStorage.getItem("myrj.yt.pool") ?? "null"); const v = c?.v?.[0]; if (v && !yt().current) yt().cue(v.id); } catch { /* ignore */ }
+    }).catch(() => {});
+  }, [prefs.music]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const phaseRef = useRef<Phase>("idle");
   useEffect(() => { phaseRef.current = phase; if (phase !== "tuning") setBoot(null); }, [phase]);
 
@@ -231,6 +248,7 @@ function LiveInner() {
     if (!musicActiveRef.current) return;
     const o = outRef.current;
     if (o === "sdk") { await (want ? playerRef.current?.pause() : playerRef.current?.resume()); return; }
+    if (o === "youtube") { if (want) { ytSelfAtRef.current = Date.now(); ytRef.current?.pause(); } else ytRef.current?.play(); return; }
     if (o === "connect") {
       const call = (dev: string) => sp(`/me/player/${want ? "pause" : "play"}?device_id=${dev}`, { method: "PUT" });
       try { await call(connectDeviceRef.current!); }
@@ -294,7 +312,7 @@ function LiveInner() {
     const langsChanged = loadPrefs().songLangs.join() !== pickerLangs;
     if (pickerMode !== modeRef.current) { up("defaultMode", pickerMode); changeMode(pickerMode); return; }
     if (langsChanged && phaseRef.current !== "idle" && outRef.current !== "none") {
-      curatorRef.current = new Curator(modeRef.current, loadPrefs().tasteSeeds ?? [], loadPrefs().songLangs);
+      curatorRef.current = mkCurator(modeRef.current);
       setNotice(`Songs in ${langSummary(loadPrefs().songLangs)} from the next track.`); setTimeout(() => setNotice(null), 3500);
     }
   }
@@ -303,7 +321,7 @@ function LiveInner() {
     if (m === modeRef.current) return;
     setListenMode(m); modeRef.current = m;
     if (phaseRef.current !== "idle") {
-      if (outRef.current !== "none") curatorRef.current = new Curator(m, loadPrefs().tasteSeeds ?? [], loadPrefs().songLangs);
+      if (outRef.current !== "none") curatorRef.current = mkCurator(m);
       switchRef.current = m;
       setNotice(`Switching to ${MODES.find((x) => x.id === m)!.label}…`);
       setTimeout(() => setNotice(null), 3000);
@@ -325,10 +343,10 @@ function LiveInner() {
     if (loadPrefs().justMusic) { cfg.none = Math.max(cfg.none, 0.7); cfg.maxGap = Math.max(cfg.maxGap, 4); }
     let kind: BreakKind = r < cfg.none ? "none" : r < cfg.none + cfg.stinger ? "stinger" : "full";
     if (kind === "none" && since >= cfg.maxGap) kind = m === "gym" || m === "focus" ? "stinger" : "full";
-    if ((m === "gym" || m === "focus") && kind === "full" && outRef.current === "sdk") kind = "stinger";
+    if ((m === "gym" || m === "focus") && kind === "full" && canDuck()) kind = "stinger";
     // Talk-over stingers only work in the in-browser player (we can duck the song). On a phone / Spotify Connect a stinger
     // would be a lone "here's <song>" line before the track, so make it a real break instead (Focus stays quiet).
-    if (kind === "stinger" && outRef.current !== "sdk") kind = m === "focus" ? (since >= cfg.maxGap ? "stinger" : "none") : "full";
+    if (kind === "stinger" && !canDuck()) kind = m === "focus" ? (since >= cfg.maxGap ? "stinger" : "none") : "full";
     if (kind === "none") return { kind };
     sinceTalkRef.current = 0;
     const newsDue = Date.now() - lastNewsRef.current > 22 * 60 * 1000;
@@ -347,7 +365,9 @@ function LiveInner() {
     });
   }
   async function fadeSdk(to: number, ms: number) {
-    const pl = playerRef.current; if (!pl) return;
+    const y = ytRef.current;
+    const pl = outRef.current === "youtube" && y ? { getVolume: async () => y.getVolume01(), setVolume: async (v: number) => y.setVolume01(v) } : playerRef.current;
+    if (!pl) return;
     const from = (await pl.getVolume().catch(() => SONG_VOL)) as number, steps = 10;
     for (let i = 1; i <= steps; i++) { await pl.setVolume(Math.max(0.0001, from + (to - from) * (i / steps))).catch(() => {}); await sleep(ms / steps); }
   }
@@ -693,6 +713,68 @@ function LiveInner() {
     return usedOutro;
   }
 
+  /** YouTube source: one setup per session. Mounts the visible IFrame player; external pauses sync the UI. */
+  async function setupYoutube(): Promise<Out> {
+    if (!ytHostRef.current) return "none";
+    try {
+      await withTimeout(yt().mount(ytHostRef.current), 12000, "YouTube player");
+      yt().onState = (st: YtState) => {
+        if (!musicActiveRef.current || Date.now() - ytSelfAtRef.current < 1500) return;
+        if (st === 2 && !pausedRef.current) syncExternal(false);
+        else if (st === 1 && pausedRef.current && appliedPauseRef.current) syncExternal(true);
+      };
+      setDiag({ output: "YouTube player (visible)", device: "This browser", error: undefined });
+      return "youtube";
+    } catch (e) { setDiag({ output: "YouTube player failed", error: String(e) }); return "none"; }
+  }
+
+  /** YouTube: same FM flow as the in-browser Spotify player (ducking via setVolume, RJ over the outro). */
+  async function playYt(t: TrackInfo, sid: number, over?: Segment | null, outro?: Promise<Segment | null> | null): Promise<boolean> {
+    const y = yt();
+    const talking = !!talkingRef.current;
+    y.setVolume01(talking ? DUCK : 0.0001);
+    y.load(t.ytId!);
+    let skipped = false;
+    skipRef.current = () => { skipped = true; };
+    // Wait for real playback; skip videos that can't be embedded (101/150), were removed (100) or won't start.
+    const t0 = Date.now(); let nudged = false;
+    while (alive(sid) && !skipped && y.state !== 1 && y.error === null) {
+      await sleep(200);
+      if (!nudged && Date.now() - t0 > 4000) { nudged = true; setNotice("Tap ▶ on the video to start the music (your browser wants one tap)."); }
+      if (Date.now() - t0 > 60000) break;
+    }
+    if (nudged) setNotice(null);
+    if (y.error !== null || y.state !== 1) {
+      log(`YouTube ${t.ytId}: ${y.error !== null ? `error ${y.error}` : "never started"}, skipping`);
+      if (y.error !== null && curatorRef.current instanceof YtCurator) curatorRef.current.markBad(t.ytId!);
+      return false;
+    }
+    if (over?.audioUrl) talkOver(over); else if (!talking) fadeSdk(SONG_VOL, 1200);
+    let ready: Segment | null | undefined;
+    outro?.then((x) => { ready = x; }).catch(() => { ready = null; });
+    let usedOutro = false, fading = false;
+    while (alive(sid) && !skipped) {
+      await sleep(400);
+      if (pausedRef.current) continue;
+      if ((y.state as YtState) === 0) break;
+      // Safety net for ads (Premium should be ad-free): another video id or a duration far off from the song's.
+      const dur = y.duration(), pos = y.time();
+      const adLike = (y.videoId() && y.videoId() !== t.ytId) || (!!t.durationMs && dur > 0 && dur < 120 && Math.abs(dur * 1000 - t.durationMs) > 15000);
+      if (adLike) { setStatus("Ad playing, the RJ waits"); continue; }
+      if ((y.state as YtState) !== 1) continue;
+      setStatus("");
+      if (dur) setProgress(pos / dur);
+      const left = dur ? (dur - pos) * 1000 : Infinity;
+      if (!usedOutro && !talkingRef.current && left <= 10000 && left > 4000 && ready?.audioUrl && ready.kind !== "switch") { usedOutro = true; talkOver(ready); }
+      if (talkingRef.current) { if (left <= 700) break; continue; }
+      if (!fading && left <= 3200) { fading = true; fadeSdk(0.0001, 2600); }
+      if (left <= 500) break;
+    }
+    if (skipped) await fadeSdk(0.0001, 600);
+    if (!talkingRef.current) { ytSelfAtRef.current = Date.now(); y.pause(); }
+    return usedOutro;
+  }
+
   const volSetRef = useRef(false);
   async function playConnect(t: TrackInfo, sid: number) {
     const dev = connectDeviceRef.current!;
@@ -735,6 +817,7 @@ function LiveInner() {
     const o = outRef.current;
     const t0 = Date.now();
     try {
+      if (o === "youtube" && t.ytId) { setPhase("song"); setStatus(""); return (await playYt(t, sid, over, outro)) ? "outro" : true; }
       if ((o === "sdk" || o === "connect") && t.uri) {
         setPhase("song"); setStatus(o === "sdk" ? "" : `Playing on ${(diagRef.current.device ?? "your device").replace(/\s*\([^)]*\)$/, "")}`);
         if (o === "sdk") return (await playSdk(t, sid, over, outro)) ? "outro" : true;
@@ -783,22 +866,37 @@ function LiveInner() {
     // ---- start-up: Spotify output, first songs and the RJ intro all run in parallel; music never waits on the intro ----
     const t0 = performance.now(), times: string[] = [];
     const timed = <T,>(name: string, pr: Promise<T>) => pr.finally(() => { times.push(`${name} ${((performance.now() - t0) / 1000).toFixed(1)}s`); setDiag({ timings: times.join(" · ") }); });
-    bootStep("spotify", "Connecting to Spotify…");
-    const curator = new Curator(modeRef.current, loadPrefs().tasteSeeds ?? [], loadPrefs().songLangs);
-    const nextFrom = async (c: Curator | null): Promise<TrackInfo | null> => {
+    const wantYt = loadPrefs().music === "youtube";
+    if (wantYt) { outRef.current = "youtube"; ytRef.current?.setVolume01(0); ytRef.current?.play(); } // inside the tap: unlocks the player on iOS
+    bootStep("spotify", wantYt ? "Starting YouTube…" : "Connecting to Spotify…");
+    let curator: AnyCurator = wantYt ? mkCurator(modeRef.current) : new Curator(modeRef.current, loadPrefs().tasteSeeds ?? [], loadPrefs().songLangs);
+    const nextFrom = async (c: AnyCurator | null): Promise<TrackInfo | null> => {
       if (!c) return null;
       for (let i = 0; i < 3; i++) { const t = await c.next().catch(() => null); if (t) return t; await sleep(Math.max(1500, spotifyBackoffMs() + 500)); }
       return null;
     };
     const nextTrack = () => nextFrom(curatorRef.current);
-    const firstP = timed("songs", getToken().then((tk) => tk ? getMe().catch(async (e) => { if (!(e instanceof SpotifyError && e.status === 429)) throw e; await sleep(Math.min(61000, spotifyBackoffMs() + 400)); return getMe(); }).then(() => nextFrom(curator), () => null) : null));
+    let firstP = wantYt ? timed("songs", nextFrom(curator)) : timed("songs", getToken().then((tk) => tk ? getMe().catch(async (e) => { if (!(e instanceof SpotifyError && e.status === 429)) throw e; await sleep(Math.min(61000, spotifyBackoffMs() + 400)); return getMe(); }).then(() => nextFrom(curator), () => null) : null));
     let firstDone = false;
     firstP.then((t) => { firstDone = true; if (alive(sid) && phaseRef.current === "tuning") setUpNext(t); });
     sinceTalkRef.current = 0; sinceJokeRef.current = 1; lastNewsRef.current = 0; switchRef.current = null;
-    const introP = timed("rj intro", firstP.then((t) => buildSegment(effPrefs(), t, null, 0, planBreak(0))));
-    const outP = timed("spotify", setupSpotify(sid));
+    let introP = timed("rj intro", firstP.then((t) => buildSegment(effPrefs(), t, null, 0, planBreak(0))));
+    const outP = timed(wantYt ? "youtube" : "spotify", wantYt ? setupYoutube() : setupSpotify(sid));
     outRef.current = await outP;
     if (!alive(sid)) return;
+    // Spotify unavailable (quota used up / not connected): fall back to YouTube if it's connected.
+    if (!wantYt && outRef.current === "none" && (await ytConnected())) {
+      log("Spotify unavailable: switching to YouTube");
+      setNotice(quotaExceeded ? "Spotify's daily quota is used up, playing from YouTube instead." : "Spotify isn't connected, playing from YouTube instead.");
+      setTimeout(() => setNotice(null), 6000);
+      bootStep("spotify", "Starting YouTube…");
+      outRef.current = await setupYoutube();
+      if (outRef.current === "youtube") {
+        curator = mkCurator(modeRef.current);
+        firstP = timed("songs", nextFrom(curator)); firstDone = false; firstP.then(() => { firstDone = true; });
+        introP = timed("rj intro", firstP.then((t) => buildSegment(effPrefs(), t, null, 0, planBreak(0))));
+      }
+    }
     if (phaseRef.current === "tuning" && !firstDone && outRef.current !== "none") bootStep("songs", "Picking your songs…");
     curatorRef.current = outRef.current !== "none" ? curator : null;
     let prev: TrackInfo | null = null;
@@ -844,7 +942,7 @@ function LiveInner() {
           if (!alive(sid)) break;
           if (seg) {
             // stingers ride over the song intro when we control the volume (in-browser player)
-            if (seg.kind === "stinger" && seg.audioUrl && outRef.current === "sdk" && next) over = seg;
+            if (seg.kind === "stinger" && seg.audioUrl && canDuck() && next) over = seg;
             else await speak(seg);
           }
         }
@@ -855,7 +953,7 @@ function LiveInner() {
           setPhase("waiting");
           setStatus(outRef.current === "none" ? "Connect Spotify for music. Your RJ will keep you company." : "Finding more music…");
           await sleep(outRef.current === "none" ? 45000 : 8000);
-          if (outRef.current !== "none" && !curatorRef.current) curatorRef.current = new Curator(modeRef.current, loadPrefs().tasteSeeds ?? [], loadPrefs().songLangs);
+          if (outRef.current !== "none" && !curatorRef.current) curatorRef.current = mkCurator(modeRef.current);
           next = await nextTrack(); setUpNext(next);
           pending = outRef.current === "none" ? buildSegment(effPrefs(), null, prev, i + 1, { kind: "full", withJoke: true }) : null;
           continue;
@@ -887,7 +985,7 @@ function LiveInner() {
   function stop(msg?: string) {
     setPausedState(false); appliedPauseRef.current = false; voicePausedRef.current = false; ctxRef.current?.resume().catch(() => {});
     sessionRef.current++; skipRef.current();
-    audioRef.current?.pause(); playerRef.current?.pause().catch(() => {});
+    audioRef.current?.pause(); playerRef.current?.pause().catch(() => {}); ytSelfAtRef.current = Date.now(); ytRef.current?.pause();
     bedRef.current?.stop(); setSpeaking(false); talkingRef.current = null;
     wakeRef.current?.release?.().catch(() => {});
     setPhase("idle"); setNow(null); setUpNext(null); setScript(""); setStatus("");
@@ -896,7 +994,9 @@ function LiveInner() {
 
   const live = phase !== "idle";
   const rjName = prefs.rjName || "Your RJ";
-  const art = phase === "song" || phase === "waiting" ? now?.image : null;
+  const ytOn = live && outRef.current === "youtube" && (phase === "song" || phase === "waiting" || phase === "rj");
+  const ytShow = ytOn && phase !== "rj";
+  const art = (phase === "song" || phase === "waiting") ? now?.image : null;
 
   return (
     <main className="ambient relative min-h-dvh w-full overflow-x-hidden" onClick={() => notice?.startsWith("Tap anywhere") && setNotice(null)}>
@@ -926,7 +1026,11 @@ function LiveInner() {
         {/* stage */}
         <section className="flex min-h-0 flex-1 flex-col items-center justify-center py-4 text-center sm:py-8">
           <div className="relative">
-            <div className={cx("aspect-square transition-transform", phase === "idle" ? "w-[min(38vw,150px,19svh)]" : "w-[min(64vw,280px,30svh)]", art && "overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]", " duration-700", speaking || phase === "rj" ? "scale-[0.72]" : phase === "song" ? "scale-100" : "scale-[0.94]")}>
+            {/* Visible YouTube player (official IFrame API). Always mounted so it keeps playing; shown while a song plays. */}
+            <div className={cx("overflow-hidden rounded-2xl bg-black transition-opacity duration-500", ytShow ? "mb-1 h-[200px] w-[min(86vw,356px)] opacity-100 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]" : "pointer-events-none absolute left-0 top-0 h-[200px] w-[356px] opacity-0")} aria-hidden={!ytShow}>
+              <div ref={ytHostRef} className="h-full w-full" />
+            </div>
+            <div className={cx("aspect-square transition-transform", ytShow && "hidden", phase === "idle" ? "w-[min(38vw,150px,19svh)]" : "w-[min(64vw,280px,30svh)]", art && "overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]", " duration-700", speaking || phase === "rj" ? "scale-[0.72]" : phase === "song" ? "scale-100" : "scale-[0.94]")}>
               {art ? <img key={art} src={art} alt="" className="fade-up h-full w-full object-cover" /> : (
                 <div className="relative flex h-full w-full items-center justify-center">
                   <Mascot state={phase === "rj" || speaking ? "talking" : phase === "tuning" || phase === "recovering" ? "tuning" : live ? "live" : "idle"} className="w-[78%]" getLevel={voiceLevel} />
@@ -1120,6 +1224,7 @@ function SessionPicker({ mode, onMode, p, up }: { mode: ListenMode; onMode: (m: 
           ))}
         </div>
       </div>
+      <div><p className={label}>Music from</p><MusicSourcePicker p={p} up={up} small /></div>
       <div><p className={label}>Songs in</p><SongLangPicker p={p} up={up} small /></div>
       <div><p className={label}>RJ talks about</p><TalkToggles p={p} up={up} small /></div>
     </div>

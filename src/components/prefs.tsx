@@ -234,6 +234,7 @@ export function AllPrefs({ p, up, compact, returnTo }: { p: Prefs; up: Up; compa
       <Section title="Song language" hint="Which songs to play. Your RJ's speaking language is set above."><SongLangPicker p={p} up={up} /></Section>
       <Section title="Your RJ talks about"><TalkToggles p={p} up={up} /></Section>
       <Section title="Default mode"><ModePicker value={p.defaultMode} onChange={(m) => up("defaultMode", m)} /></Section>
+      <Section title="Music from"><MusicSourcePicker p={p} up={up} returnTo={returnTo ?? "/settings"} /></Section>
       <Section title="Spotify"><SpotifyConnect returnTo={returnTo} /></Section>
       <Section title="Add your music from anywhere" hint="Screenshots from YouTube Music, Apple Music, JioSaavn, a playlist link, or a typed list. MyRJ finds them on Spotify and leans your radio towards them."><MusicImport p={p} up={up} /></Section>
       <Section title="YouTube" hint="Pull your liked music and playlists from YouTube / YouTube Music."><YouTubeConnect p={p} up={up} returnTo={returnTo} /></Section>
@@ -388,6 +389,25 @@ export function TalkToggles({ p, up, small }: { p: Prefs; up: Up; small?: boolea
         </button>
       ))}
       <button type="button" aria-pressed={p.justMusic} onClick={() => up("justMusic", !p.justMusic)} className={pill(p.justMusic)}>Just music</button>
+    </div>
+  );
+}
+
+/** Playback source: Spotify or a visible YouTube player. */
+export function MusicSourcePicker({ p, up, small, returnTo = "/live" }: { p: Prefs; up: Up; small?: boolean; returnTo?: string }) {
+  const [yt, setYt] = useState<boolean | null>(null);
+  useEffect(() => { fetch("/api/youtube/songs?status").then((r) => r.json()).then((j) => setYt(!!j.connected)).catch(() => setYt(false)); }, []);
+  const pill = (on: boolean) => cx("rounded-full border px-3.5 transition active:scale-95", small ? "h-8 text-[13px]" : "h-9 text-sm", on ? "border-[#f3efe8] bg-[#f3efe8] text-[#141210]" : "border-white/10 text-zinc-300 hover:border-white/25");
+  const src = p.music ?? "spotify";
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label="Music from">
+        {(["spotify", "youtube"] as const).map((s) => (
+          <button key={s} type="button" role="radio" aria-checked={src === s} onClick={() => up("music", s)} className={pill(src === s)}>{s === "spotify" ? "Spotify" : "YouTube"}</button>
+        ))}
+        {src === "youtube" && yt === false && <a href={`/api/auth/youtube/login?return=${encodeURIComponent(returnTo)}`} className="ml-1 text-[13px] text-[#f3efe8] underline underline-offset-2">Connect YouTube</a>}
+      </div>
+      {src === "youtube" && <p className={cx("mt-1.5 text-zinc-500", small ? "text-[11px] leading-snug" : "text-xs")}>Plays in a visible YouTube player. Ad-free if signed in to YouTube Premium in this browser. On a phone it stops when the screen locks.</p>}
     </div>
   );
 }
