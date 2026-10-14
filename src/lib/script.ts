@@ -7,7 +7,8 @@ export interface SegmentInput {
   prev?: TrackInfo | null;
   index: number;
   mode?: ListenMode;
-  recent?: string[]; // recent scripts, used to avoid repeating lines
+  recent?: string[];
+  hour?: number; // listener's local hour, for time-of-day banter // recent scripts, used to avoid repeating lines
   headlines: Headline[];
 }
 
@@ -24,6 +25,39 @@ const GREET: Record<"en" | "hl" | "hi" | "mr", string[]> = {
   hi: ["{rj} फिर से हाज़िर है, {me}", "क्या गाना था, {me}", "मूड बना हुआ है, {me}", "चलिए {me}, आगे बढ़ते हैं"],
   mr: ["{rj} पुन्हा तुमच्यासोबत, {me}", "काय गाणं होतं, {me}", "मूड एकदम सेट आहे, {me}", "चला {me}, पुढे जाऊया"],
 };
+type K = "en" | "hl" | "hi" | "mr";
+function banter(k: K, hour: number | undefined, me: string): string {
+  const h = hour ?? 12;
+  const slot = h < 5 ? "late" : h < 12 ? "morning" : h < 17 ? "afternoon" : h < 21 ? "evening" : "late";
+  const B: Record<K, Record<string, string[]>> = {
+    en: {
+      morning: [`Morning energy check, ${me}: coffee first, world later.`, `Fresh morning, fresh playlist. Let's make today count.`],
+      afternoon: [`Afternoon slump? Not on this station.`, `Half the day done, ${me}. The good half starts now.`],
+      evening: [`Evening mode on. Shoulders down, volume up.`, `Long day, ${me}? This next stretch is just for you.`],
+      late: [`Late night crew, I see you, ${me}.`, `It's late, the city's quiet, and the music's just right.`],
+      any: [`Honestly ${me}, your taste in music is elite.`, `If this station had a fan club, you'd be president.`, `Little reminder: drink some water, ${me}.`],
+    },
+    hl: {
+      morning: [`Good morning ${me}! Pehle chai, phir duniya.`, `Subah subah ka mood ekdum fresh hai.`],
+      afternoon: [`Dopahar ki neend aa rahi hai? Is station pe allowed nahi hai.`, `Aadha din ho gaya ${me}, ab asli maza shuru.`],
+      evening: [`Shaam ho gayi ${me}, thoda relax karo, volume badhao.`, `Lamba din tha? Ye agla stretch sirf aapke liye.`],
+      late: [`Raat ke jaagne waalon ko salaam, ${me}.`, `Raat shaant hai, aur music ekdum perfect.`],
+      any: [`Sach bolun ${me}, aapka music taste top class hai.`, `Is station ka fan club hota toh aap president hote.`, `Chhota sa reminder: paani pee lo, ${me}.`],
+    },
+    hi: {
+      morning: [`सुप्रभात ${me}! पहले चाय, फिर दुनिया।`], afternoon: [`दोपहर की सुस्ती? इस स्टेशन पर मना है।`],
+      evening: [`शाम हो गई ${me}, थोड़ा आराम कीजिए।`], late: [`रात के जागने वालों को सलाम, ${me}।`],
+      any: [`सच कहूँ ${me}, आपकी पसंद कमाल की है।`, `छोटा सा रिमाइंडर: पानी पी लीजिए, ${me}।`],
+    },
+    mr: {
+      morning: [`सुप्रभात ${me}! आधी चहा, मग जग.`], afternoon: [`दुपारची झोप? या स्टेशनवर नाही चालणार.`],
+      evening: [`संध्याकाळ झाली ${me}, जरा आराम करा.`], late: [`रात्री जागणाऱ्यांना सलाम, ${me}.`],
+      any: [`खरं सांगू ${me}, तुमची गाण्यांची आवड भारी आहे.`, `छोटीशी आठवण: पाणी प्या, ${me}.`],
+    },
+  };
+  return pick([...B[k][slot], ...B[k].any]);
+}
+
 const UPNEXT: Record<"en" | "hl" | "hi" | "mr", string[]> = {
   en: ["Up next, {t}", "Here comes {t}", "Turning it up with {t}", "Let's roll into {t}", "Coming right up, {t}"],
   hl: ["Ab sunte hain {t}", "Agla gaana, {t}", "Volume up karo, aa raha hai {t}", "Chalo, {t} bajate hain", "Ye raha {t}"],
@@ -61,26 +95,28 @@ function jokeFor(humor: Humor, lang: Language) {
   return pick(lang === "english" || lang === "hinglish" ? set.en : lang === "marathi" ? set.mr : set.hi);
 }
 
+function shortTitle(t: string) { return t.length > 140 ? t.slice(0, 140).replace(/\s\S*$/, "") : t; }
+
 function trackLine(t?: TrackInfo | null) {
   return t ? `"${t.name}" by ${t.artists}` : "";
 }
 
 const MODE_LINES: Record<"gym" | "drive" | "focus", Record<"en" | "hi" | "hl" | "mr", string[]>> = {
   gym: {
-    en: ["One more rep, {me}. Pain is temporary, gains are forever!", "No excuses today, {me}. Let's crush this set!", "Breathe, brace, and lift, {me}. You've got this!"],
-    hl: ["Ek aur rep, {me}! Dard temporary hai, gains permanent!", "Aaj koi excuse nahi, {me}. Set todo!", "Saans lo, focus karo, aur utha do, {me}!"],
+    en: ["Stronger than yesterday, {me}. Prove it!", "Your only competition is who you were last week!", "Form first, then fire!", "One more rep, {me}. Pain is temporary, gains are forever!", "No excuses today, {me}. Let's crush this set!", "Breathe, brace, and lift, {me}. You've got this!"],
+    hl: ["Kal se strong ho aap, {me}, prove karo!", "Competition sirf pichle hafte waale aap se hai!", "Pehle form, phir fire!", "Ek aur rep, {me}! Dard temporary hai, gains permanent!", "Aaj koi excuse nahi, {me}. Set todo!", "Saans lo, focus karo, aur utha do, {me}!"],
     hi: ["एक और रेप, {me}! दर्द कुछ पल का है, ताकत हमेशा की!", "आज कोई बहाना नहीं, {me}। ये सेट तोड़ दो!"],
     mr: ["अजून एक रेप, {me}! वेदना क्षणभर, ताकद कायमची!", "आज कोणतीही सबब नाही, {me}. हा सेट फोडून टाका!"],
   },
   drive: {
-    en: ["Windows down, volume up, {me}. Sing it like nobody's listening!", "Road's open, {me}. This one's a singalong, don't hold back!"],
-    hl: ["Windows neeche, volume upar, {me}! Gaana zor se gaana!", "Road khula hai, {me}. Is gaane pe singalong compulsory hai!"],
+    en: ["Long road, good company, better music.", "If there's traffic, this song is your excuse to sing louder.", "Windows down, volume up, {me}. Sing it like nobody's listening!", "Road's open, {me}. This one's a singalong, don't hold back!"],
+    hl: ["Lambi road, achhi company, aur usse bhi achha music.", "Traffic mein phase ho? Toh aur zor se gaao!", "Windows neeche, volume upar, {me}! Gaana zor se gaana!", "Road khula hai, {me}. Is gaane pe singalong compulsory hai!"],
     hi: ["खिड़कियाँ नीचे, आवाज़ ऊपर, {me}! ज़ोर से गाइए!", "सड़क खुली है, {me}। इस गाने पर साथ में गाना ज़रूरी है!"],
     mr: ["खिडक्या खाली, आवाज वर, {me}! मोठ्याने गा!", "रस्ता मोकळा आहे, {me}. या गाण्यावर सोबत गायलंच पाहिजे!"],
   },
   focus: {
-    en: ["Staying in the zone with {track}.", "Deep work continues, {me}. Next up, {track}."],
-    hl: ["Focus mode on, {me}. Ab {track}.", "Zone mein raho, {me}. Next, {track}."],
+    en: ["Staying in the zone with {track}.", "Deep work continues, {me}. Next up, {track}.", "Quiet focus, steady flow. Here's {track}.", "You're doing great, {me}. Keep going with {track}."],
+    hl: ["Focus mode on, {me}. Ab {track}.", "Zone mein raho, {me}. Next, {track}.", "Kaam chalta rahe, {me}. Saath mein {track}.", "Badhiya chal raha hai, {me}. Ab {track}."],
     hi: ["फोकस बनाए रखिए, {me}। अब {track}।"],
     mr: ["लक्ष केंद्रित ठेवा, {me}. आता {track}."],
   },
@@ -90,48 +126,65 @@ export function templateScript(input: SegmentInput): string {
   RECENT = input.recent ?? [];
   return templateInner(input);
 }
-function templateInner({ prefs, next, index, headlines, mode = "default" }: SegmentInput): string {
+function templateInner({ prefs, next, index, headlines, mode = "default", hour: input_hour }: SegmentInput): string {
   if (mode !== "default") {
-    const k = prefs.language === "english" ? "en" : prefs.language === "hinglish" ? "hl" : prefs.language === "hindi" ? "hi" : "mr";
-    const fill = (x: string) => x.replace("{me}", prefs.listenerName).replace("{track}", trackLine(next) || "the next one");
-    const line = fill(pick(MODE_LINES[mode][k]));
-    if (mode === "focus") return line;
-    const extra = mode === "drive" && prefs.humor !== "off" && index % 2 === 1 ? " " + jokeFor(prefs.humor, prefs.language) : "";
+    const k: K = prefs.language === "english" ? "en" : prefs.language === "hinglish" ? "hl" : prefs.language === "hindi" ? "hi" : "mr";
+    const me = prefs.listenerName;
+    const fill = (x: string) => x.replace("{me}", me).replace("{track}", trackLine(next) || "the next one");
     const tl = trackLine(next);
+    const upnext = tl ? pick(UPNEXT[k]).replace("{t}", tl) + "!" : "";
     const intro = index === 0 ? `${prefs.rjName} ${k === "en" ? "here" : k === "hl" ? "aa gaya" : k === "hi" ? "हाज़िर है" : "आला"}! ` : "";
-    return `${intro}${line}${extra}${tl ? ` ${tl}!` : ""}`;
+    if (mode === "focus") return intro + fill(pick(MODE_LINES.focus[k]));
+    if (mode === "gym") {
+      const l1 = fill(pick(MODE_LINES.gym[k]));
+      RECENT = [...RECENT, l1];
+      const l2 = fill(pick(MODE_LINES.gym[k]));
+      return [intro + l1, l2 !== l1 ? l2 : "", upnext].filter(Boolean).join(" ");
+    }
+    // drive: banter + road line + joke + a headline every other break + intro
+    const g0 = index === 0 ? "" : pick(GREET[k]).replace("{rj}", prefs.rjName).replace("{me}", me);
+    const g = g0 && !/[?!]$/.test(g0) ? g0 + "!" : g0;
+    const news = index % 2 === 0 && headlines[0] ? `${k === "en" ? "On the news front" : k === "hl" ? "Ek quick khabar" : k === "hi" ? "एक ताज़ा खबर" : "एक ताजी बातमी"}: ${shortTitle(headlines[0].title)}.` : "";
+    const joke = prefs.humor !== "off" ? jokeFor(prefs.humor, prefs.language) : "";
+    return [(intro + g).trim(), fill(pick(MODE_LINES.drive[k])), news, joke, upnext].filter(Boolean).join(" ");
   }
   const { rjName, listenerName: me, language, humor, energy } = prefs;
   const hype = energy === "hype" ? "!" : ".";
   const joke = jokeFor(humor, language);
-  const news = (index % 2 === 0 ? headlines.slice(0, 1) : []).map((h) => ({ ...h, title: h.title.length > 110 ? h.title.slice(0, 110).replace(/\s\S*$/, "") : h.title }));
+  const news = (index % 2 === 0 ? headlines.slice(0, 2) : []).map((h) => ({ ...h, title: shortTitle(h.title) }));
   const tl = trackLine(next);
   const parts: string[] = [];
   const k = language === "english" ? "en" : language === "hinglish" ? "hl" : language === "hindi" ? "hi" : "mr";
-  const greet = pick(GREET[k]).replace("{rj}", rjName).replace("{me}", me) + hype;
+  const greetRaw = pick(GREET[k]).replace("{rj}", rjName).replace("{me}", me);
+  const greet = /[?!]$/.test(greetRaw) ? greetRaw : greetRaw + hype;
   const upnext = tl ? pick(UPNEXT[k]).replace("{t}", tl) + hype : "";
+  const chat = banter(k, input_hour, me);
 
   switch (language) {
     case "english":
       parts.push(index === 0 ? `Hey ${me}, you're tuned in to ${rjName}, your very own radio${hype}` : greet);
+      parts.push(chat);
       if (news.length) parts.push(`Quick news check: ${news.map((h) => h.title).join(". Also, ")}.`);
       if (joke) parts.push(joke);
       if (upnext) parts.push(upnext);
       break;
     case "hindi":
       parts.push(index === 0 ? `नमस्ते ${me}, आप सुन रहे हैं ${rjName}, सिर्फ आपका अपना रेडियो${hype}` : greet);
+      parts.push(chat);
       if (news.length) parts.push(`ताज़ा खबरें: ${news.map((h) => h.title).join("। और, ")}।`);
       if (joke) parts.push(joke);
       if (upnext) parts.push(upnext);
       break;
     case "marathi":
       parts.push(index === 0 ? `नमस्कार ${me}, तुम्ही ऐकताय ${rjName}, फक्त तुमचा स्वतःचा रेडिओ${hype}` : greet);
+      parts.push(chat);
       if (news.length) parts.push(`ताज्या बातम्या: ${news.map((h) => h.title).join(". आणि, ")}.`);
       if (joke) parts.push(joke);
       if (upnext) parts.push(upnext);
       break;
     default: // hinglish
       parts.push(index === 0 ? `Hello ${me}, aap sun rahe ho ${rjName}, sirf aapka apna radio${hype}` : greet);
+      parts.push(chat);
       if (news.length) parts.push(`Quick news update: ${news.map((h) => h.title).join(". Aur, ")}.`);
       if (joke) parts.push(joke);
       if (upnext) parts.push(upnext);

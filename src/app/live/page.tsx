@@ -176,18 +176,20 @@ function LiveInner() {
       const synth = window.speechSynthesis;
       if (!synth) { log("no browser voice available"); setTimeout(resolve, 3000); return; }
       synth.cancel();
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = lang;
       const vs = synth.getVoices();
       const v = vs.find((x) => x.lang === lang) ?? vs.find((x) => x.lang.startsWith(lang.slice(0, 2)));
-      if (v) u.voice = v;
-      u.rate = 1.05;
+      // Chrome cuts long utterances (~15s), so speak sentence by sentence.
+      const parts = text.match(/[^.!?।]+[.!?।]*/g)?.map((x) => x.trim()).filter(Boolean) ?? [text];
       let done = false;
       const finish = () => { if (!done) { done = true; synth.cancel(); resolve(); } };
-      u.onend = finish; u.onerror = finish;
       skipRef.current = finish;
-      setTimeout(finish, 60000);
-      synth.speak(u);
+      setTimeout(finish, 90000);
+      parts.forEach((t, i) => {
+        const u = new SpeechSynthesisUtterance(t);
+        u.lang = lang; if (v) u.voice = v; u.rate = 1.05;
+        if (i === parts.length - 1) { u.onend = finish; u.onerror = finish; }
+        synth.speak(u);
+      });
     });
   }
 
@@ -196,7 +198,7 @@ function LiveInner() {
     try {
       const seg = await withTimeout(fetch("/api/segment", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prefs: p, next, prev, index, mode: modeRef.current, recent: recentRef.current.slice(-4) }),
+        body: JSON.stringify({ prefs: p, next, prev, index, mode: modeRef.current, recent: recentRef.current.slice(-4), hour: new Date().getHours() }),
       }).then((r) => { if (!r.ok) throw new Error(`segment ${r.status}`); return r.json(); }), 20000, "segment");
       recentRef.current.push(seg.script);
       const lang = { english: "en-IN", hinglish: "hi-IN", hindi: "hi-IN", marathi: "mr-IN" }[p.language];
