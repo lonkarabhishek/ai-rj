@@ -23,7 +23,7 @@ export const elevenEnabled = () => !!process.env.ELEVENLABS_API_KEY;
 /** Curated Indian voices, used when the live list can't be fetched. Calm female first = default. */
 export const AZURE_CURATED: VoiceInfo[] = [
   ["en-IN-NeerjaNeural", "Neerja", "en-IN", "Female", ["newscast", "cheerful", "empathetic"]],
-  ["hi-IN-SwaraNeural", "Swara", "hi-IN", "Female", []],
+  ["hi-IN-SwaraNeural", "Swara", "hi-IN", "Female", ["newscast", "cheerful", "empathetic"]],
   ["en-IN-PrabhatNeural", "Prabhat", "en-IN", "Male", []],
   ["hi-IN-MadhurNeural", "Madhur", "hi-IN", "Male", []],
   ["en-IN-AartiNeural", "Aarti", "en-IN", "Female", []],
@@ -78,31 +78,50 @@ export async function listElevenVoices(): Promise<VoiceInfo[]> {
 }
 
 // ---------- SSML ----------
-const PROSODY: Record<Energy, { rate: string; pitch: string }> = {
-  chill: { rate: "-6%", pitch: "-2%" }, balanced: { rate: "0%", pitch: "0%" }, hype: { rate: "+10%", pitch: "+4%" },
+export type Mood = "hype" | "cheerful" | "warm" | "calm";
+const MOOD: Record<Mood, { rate: number; pitch: number; styles: string[]; degree: number }> = {
+  hype: { rate: 18, pitch: 6, styles: ["excited", "cheerful", "happy", "joyful"], degree: 1.4 },
+  cheerful: { rate: 10, pitch: 3, styles: ["cheerful", "friendly", "happy", "joyful"], degree: 1.2 },
+  warm: { rate: 7, pitch: 1, styles: ["friendly", "cheerful", "empathetic", "hopeful"], degree: 0.9 },
+  calm: { rate: -4, pitch: -1, styles: ["calm", "gentle", "softvoice", "empathetic"], degree: 0.8 },
 };
-const MODE_STYLE: Record<ListenMode, string[]> = {
-  default: ["cheerful", "friendly"], gym: ["excited", "cheerful"], drive: ["cheerful", "friendly"], focus: ["calm", "gentle", "empathetic"],
-};
+export const MODE_MOOD: Record<ListenMode, Mood> = { default: "cheerful", drive: "cheerful", gym: "hype", focus: "calm" };
+const ENERGY_SHIFT: Record<Energy, number> = { chill: -5, balanced: 0, hype: 5 };
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 
-export function buildSsml(text: string, shortName: string, energy: Energy = "balanced", mode: ListenMode = "default", styles: string[] = []) {
-  const locale = shortName.split("-").slice(0, 2).join("-");
-  let { rate, pitch } = PROSODY[energy] ?? PROSODY.balanced;
-  if (mode === "focus") { rate = "-8%"; pitch = "-2%"; }
-  if (mode === "gym") { rate = "+12%"; pitch = "+5%"; }
-  const style = MODE_STYLE[mode]?.find((s) => styles.includes(s));
-  const inner = `<prosody rate="${rate}" pitch="${pitch}">${esc(text)}</prosody>`;
+/** Mood (from the script writer, else the mode default) drives style/rate/pitch; energy nudges. Never slower than normal outside Focus/chill. */
+export function buildSsml(text: string, shortName: string, energy: Energy = "balanced", mode: ListenMode = "default", styles: string[] = [], mood?: Mood) {
+  const locale = shortName.split(/[-:]/).slice(0, 2).join("-");
+  const m = MOOD[mood ?? MODE_MOOD[mode]] ?? MOOD.cheerful;
+  let rate = m.rate + (ENERGY_SHIFT[energy] ?? 0);
+  if (mode !== "focus" && energy !== "chill") rate = Math.max(rate, 4);
+  if (mode === "gym") rate = Math.max(rate, 15);
+  const style = m.styles.find((s) => styles.includes(s));
+  const sign = (n: number) => (n >= 0 ? `+${n}%` : `${n}%`);
+  const inner = `<prosody rate="${sign(rate)}" pitch="${sign(m.pitch)}">${esc(text)}</prosody>`;
   return `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="${locale}">` +
-    `<voice name="${shortName}">${style ? `<mstts:express-as style="${style}">${inner}</mstts:express-as>` : inner}</voice></speak>`;
+    `<voice name="${shortName}">${style ? `<mstts:express-as style="${style}" styledegree="${m.degree}">${inner}</mstts:express-as>` : inner}</voice></speak>`;
+}
+
+// live style lists (cached), so styles work for any voice that supports them
+let styleCache: { at: number; map: Map<string, string[]> } | null = null;
+async function stylesFor(short: string): Promise<string[]> {
+  if (!styleCache || Date.now() - styleCache.at > 6 * 3600_000) {
+    try {
+      const r = await fetch(`${azureBase()}/cognitiveservices/voices/list`, { headers: { "Ocp-Apim-Subscription-Key": azureKey()! } });
+      const all = r.ok ? ((await r.json()) as { ShortName: string; StyleList?: string[] }[]) : [];
+      styleCache = { at: Date.now(), map: new Map(all.map((v) => [v.ShortName, v.StyleList ?? []])) };
+    } catch { styleCache = { at: Date.now() - 5.9 * 3600_000, map: new Map() }; }
+  }
+  return styleCache.map.get(short) ?? AZURE_CURATED.find((v) => v.id === `azure:${short}`)?.styles ?? [];
 }
 
 export class TtsError extends Error { constructor(public provider: string, public code: string, msg: string) { super(msg); } }
 
-export async function azureTts(text: string, voiceId: string, energy: Energy, mode: ListenMode): Promise<ArrayBuffer> {
+export async function azureTts(text: string, voiceId: string, energy: Energy, mode: ListenMode, mood?: Mood): Promise<ArrayBuffer> {
   if (!azureEnabled()) throw new TtsError("azure", "not_configured", "Azure Speech key not set");
   const short = voiceId.replace(/^azure:/, "");
-  const styles = AZURE_CURATED.find((v) => v.id === voiceId)?.styles ?? [];
+  const styles = await stylesFor(short);
   let last: TtsError | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     const r = await fetch(`${azureBase()}/cognitiveservices/v1`, {
@@ -111,7 +130,7 @@ export async function azureTts(text: string, voiceId: string, energy: Energy, mo
         "Ocp-Apim-Subscription-Key": azureKey()!, "Content-Type": "application/ssml+xml",
         "X-Microsoft-OutputFormat": "audio-24khz-96kbitrate-mono-mp3", "User-Agent": "MyRJ",
       },
-      body: buildSsml(text, short, energy, mode, styles),
+      body: buildSsml(text, short, energy, mode, styles, mood),
     }).catch(() => null);
     if (r?.ok) return r.arrayBuffer();
     last = new TtsError("azure", r ? `http_${r.status}` : "network", `Azure ${r?.status ?? "network error"}`);

@@ -8,7 +8,10 @@ export interface SegmentInput {
   index: number;
   mode?: ListenMode;
   recent?: string[];
-  hour?: number; // listener's local hour, for time-of-day banter // recent scripts, used to avoid repeating lines
+  hour?: number;
+  kind?: "stinger" | "full" | "switch"; // stinger = one line over the intro; full = a proper break
+  withNews?: boolean;
+  withJoke?: boolean; // listener's local hour, for time-of-day banter // recent scripts, used to avoid repeating lines
   headlines: Headline[];
 }
 
@@ -126,7 +129,28 @@ export function templateScript(input: SegmentInput): string {
   RECENT = input.recent ?? [];
   return templateInner(input);
 }
-function templateInner({ prefs, next, index, headlines, mode = "default", hour: input_hour }: SegmentInput): string {
+function templateInner(input: SegmentInput): string {
+  const { prefs, next, index, mode = "default" } = input;
+  if (input.kind === "switch") {
+    const k: K = prefs.language === "english" ? "en" : prefs.language === "hinglish" ? "hl" : prefs.language === "hindi" ? "hi" : "mr";
+    const L: Record<ListenMode, Record<K, string>> = {
+      gym: { en: "Gym mode on. Let's lift!", hl: "Gym mode on! Chalo, utha do!", hi: "जिम मोड ऑन! चलो, जोश दिखाओ!", mr: "जिम मोड ऑन! चला, जोर लावा!" },
+      drive: { en: "Driving mode. Windows down, here we go!", hl: "Driving mode on! Seatbelt lagao, chalte hain!", hi: "ड्राइविंग मोड! सीटबेल्ट लगाइए, चलते हैं!", mr: "ड्रायव्हिंग मोड! सीटबेल्ट लावा, निघूया!" },
+      focus: { en: "Focus mode. I'll keep it quiet.", hl: "Focus mode on. Main chup rahunga, aap kaam karo.", hi: "फोकस मोड। मैं चुप रहूँगा, आप काम कीजिए।", mr: "फोकस मोड. मी शांत राहतो, तुम्ही काम करा." },
+      default: { en: "Back to your mix!", hl: "Wapas aapke mix pe!", hi: "वापस आपके मिक्स पर!", mr: "परत तुमच्या मिक्सवर!" },
+    };
+    return L[mode][k];
+  }
+  if (input.kind === "stinger" && index > 0) {
+    const k: K = prefs.language === "english" ? "en" : prefs.language === "hinglish" ? "hl" : prefs.language === "hindi" ? "hi" : "mr";
+    const tl = trackLine(next);
+    if (!tl) return "";
+    if (mode === "gym" || mode === "focus") return pick(MODE_LINES[mode][k]).replace("{me}", prefs.listenerName).replace("{track}", tl);
+    return pick(UPNEXT[k]).replace("{t}", tl) + ".";
+  }
+  return templateFull(input);
+}
+function templateFull({ prefs, next, index, headlines, mode = "default", hour: input_hour, withJoke }: SegmentInput): string {
   if (mode !== "default") {
     const k: K = prefs.language === "english" ? "en" : prefs.language === "hinglish" ? "hl" : prefs.language === "hindi" ? "hi" : "mr";
     const me = prefs.listenerName;
@@ -144,14 +168,14 @@ function templateInner({ prefs, next, index, headlines, mode = "default", hour: 
     // drive: banter + road line + joke + a headline every other break + intro
     const g0 = index === 0 ? "" : pick(GREET[k]).replace("{rj}", prefs.rjName).replace("{me}", me);
     const g = g0 && !/[?!]$/.test(g0) ? g0 + "!" : g0;
-    const news = index % 2 === 0 && headlines[0] ? `${k === "en" ? "On the news front" : k === "hl" ? "Ek quick khabar" : k === "hi" ? "एक ताज़ा खबर" : "एक ताजी बातमी"}: ${shortTitle(headlines[0].title)}.` : "";
-    const joke = prefs.humor !== "off" ? jokeFor(prefs.humor, prefs.language) : "";
+    const news = headlines[0] ? `${k === "en" ? "On the news front" : k === "hl" ? "Ek quick khabar" : k === "hi" ? "एक ताज़ा खबर" : "एक ताजी बातमी"}: ${shortTitle(headlines[0].title)}.` : "";
+    const joke = prefs.humor !== "off" && withJoke !== false ? jokeFor(prefs.humor, prefs.language) : "";
     return [(intro + g).trim(), fill(pick(MODE_LINES.drive[k])), news, joke, upnext].filter(Boolean).join(" ");
   }
   const { rjName, listenerName: me, language, humor, energy } = prefs;
   const hype = energy === "hype" ? "!" : ".";
-  const joke = jokeFor(humor, language);
-  const news = (index % 2 === 0 ? headlines.slice(0, 2) : []).map((h) => ({ ...h, title: shortTitle(h.title) }));
+  const joke = withJoke === false ? "" : jokeFor(humor, language);
+  const news = headlines.slice(0, 2).map((h) => ({ ...h, title: shortTitle(h.title) }));
   const tl = trackLine(next);
   const parts: string[] = [];
   const k = language === "english" ? "en" : language === "hinglish" ? "hl" : language === "hindi" ? "hi" : "mr";
@@ -192,35 +216,116 @@ function templateInner({ prefs, next, index, headlines, mode = "default", hour: 
   return parts.join(" ");
 }
 
-// ---- Optional LLM mode: any OpenAI-compatible API (OpenAI, Groq, OpenRouter, xAI...).
-// Set OPENAI_API_KEY (+ optional LLM_BASE_URL, LLM_MODEL) to enable.
+const LANG_RULES: Record<string, string> = {
+  english: "Speak natural Indian English, the way a Mumbai or Bangalore FM host talks.",
+  hinglish: "Speak natural Hinglish in Roman script: Hindi and English mixed mid-sentence the way young urban Indians actually talk (e.g. 'Yaar, ye gaana toh full nostalgia trip hai'). No Devanagari.",
+  hindi: "Speak conversational Hindi in Devanagari script. Common English words (song, playlist, AI, office) are fine as Indians say them.",
+  marathi: "Speak conversational Marathi in Devanagari script, warm Pune/Mumbai FM style. Common English words are fine as Marathi speakers use them.",
+};
+const HUMOR_RULES: Record<string, string> = {
+  off: "No jokes at all.",
+  clean: "Humor: clean, family-friendly, light wordplay.",
+  normal: "Humor: everyday relatable observational jokes (traffic, Mondays, chai, office life).",
+  witty: "Humor: sharp, clever, dry wit with a real punchline; tech and startup jokes welcome.",
+  dark: "Humor: dark, deadpan and self-deprecating (deadlines, bank balance, existential dread), never cruel about real tragedies or groups of people.",
+};
+const MODE_RULES: Record<string, string> = {
+  default: "Mode: My Mix. A normal break: 2 to 4 sentences. Real banter, a joke when asked, news when given, then a smooth segue into the next song.",
+  drive: "Mode: Driving. Road-trip buddy energy: playful, sing-along vibes, mention the road or the drive. 2 to 4 sentences, joke when asked, news when given, then the segue.",
+  gym: "Mode: Gym. Hype coach energy. 2 to 3 short punchy sentences, motivational, no news, no long jokes. End by firing up the next song.",
+  focus: "Mode: Work/Focus. Calm and minimal. ONE short sentence (max 15 words) that gently names the next track. No jokes, no news.",
+};
+
+export function systemPrompt(p: SegmentInput["prefs"], mode: ListenMode) {
+  return `You are ${p.rjName}, a charismatic Indian FM radio jockey hosting a private, one-listener radio show for ${p.listenerName}. Think the warmth and wit of the best Indian FM RJs: quick, playful, effortlessly cool, genuinely fond of your listener.
+
+How you talk:
+- ${LANG_RULES[p.language] ?? LANG_RULES.english}
+- Energy: ${p.energy} (chill = mellow and warm, balanced = upbeat and friendly, hype = loud, fast, exclamation-heavy).
+- ${HUMOR_RULES[p.humor] ?? HUMOR_RULES.normal}
+- ${MODE_RULES[mode] ?? MODE_RULES.default}
+- Talk about the actual next song and artist like a music lover: a real fact, the mood, the era, or why it fits this moment, mode or time of day. Never invent fake facts; if unsure, talk about the vibe instead.
+- When headlines are provided, retell one or two conversationally in your own words, like telling a friend, with a quick reaction. Don't read them out verbatim.
+- Segue smoothly from banter into the song; the very last thing you say introduces the next track by name.
+- Use ${p.listenerName}'s name sometimes, not every time.
+- Never repeat openers, jokes, phrases or structures from the recent breaks you are shown. Vary how you start.
+
+Written for speech, read aloud by a TTS voice:
+- Output ONLY the words to speak. No emojis, markdown, hashtags, quotes around the whole thing, stage directions or sound effects.
+- Spell numbers and symbols naturally ("twenty twenty-six", "ten percent").
+- Short, rhythmic sentences that sound good out loud.
+- Start your reply with a delivery tag for the voice, exactly one of [hype] [cheerful] [warm] [calm], matching the line's energy (e.g. [hype] for gym, [cheerful] for a fun break, [warm] for a heartfelt song, [calm] for focus). Then the words.
+
+Like real FM, you only talk when you have something worth saying: an interesting fact about the song or artist, a fresh headline, a fitting joke, or a time-of-day moment. Filler like "that was a great song" is not worth saying. If you have nothing good, reply with exactly SKIP and the music just keeps flowing.`;
+}
+
+/** Writes the RJ script with an LLM. Anthropic Claude first, then any OpenAI-compatible API. Null on failure/timeout. */
+export function splitMood(t: string): { mood?: "hype" | "cheerful" | "warm" | "calm"; text: string } {
+  const m = t.match(/^\s*\[([a-z]+)\]\s*/i);
+  if (!m) return { text: t };
+  const tag = m[1].toLowerCase();
+  return { mood: (["hype", "cheerful", "warm", "calm"].includes(tag) ? tag : undefined) as "hype" | undefined, text: t.slice(m[0].length).trim() };
+}
+
 export async function llmScript(input: SegmentInput): Promise<string | null> {
-  const key = process.env.OPENAI_API_KEY || process.env.LLM_API_KEY;
-  if (!key) return null;
-  const base = process.env.LLM_BASE_URL || "https://api.openai.com/v1";
-  const model = process.env.LLM_MODEL || "gpt-4o-mini";
   const { prefs, next, prev, index, headlines } = input;
-  const sys = `You are ${prefs.rjName}, a radio jockey for one listener named ${prefs.listenerName}. Speak only in ${prefs.language} (Hindi/Marathi in Devanagari; Hinglish in Roman script). Energy: ${prefs.energy}. Humor style: ${prefs.humor}. Output only the spoken words, no stage directions, no emojis. ${
-    input.mode === "gym" ? "Listening mode: GYM. Be a hype coach: short punchy motivational lines, max 30 words." :
-    input.mode === "drive" ? "Listening mode: DRIVING. Playful road-trip buddy vibe, encourage singing along, max 45 words." :
-    input.mode === "focus" ? "Listening mode: WORK/FOCUS. Calm, minimal, max 12 words, just name the next track." : "40-80 words."}`;
+  const mode = input.mode ?? "default";
+  const h = input.hour ?? 12;
+  const timeOfDay = h < 5 ? "late night" : h < 12 ? "morning" : h < 17 ? "afternoon" : h < 21 ? "evening" : "night";
+  const stinger = input.kind === "stinger" && index > 0;
+  const isSwitch = input.kind === "switch";
+  const wantNews = !stinger && !isSwitch && mode !== "gym" && mode !== "focus" && headlines.length > 0;
+  const wantJoke = !stinger && !isSwitch && mode !== "gym" && mode !== "focus" && prefs.humor !== "off" && input.withJoke !== false;
   const user = [
-    index === 0 ? "This is the show opener." : `Previous song: ${trackLine(prev) || "none"}.`,
-    `Next song: ${trackLine(next) || "none"}.`,
-    input.mode && input.mode !== "default" ? "No news." : index % 2 === 0 && headlines.length ? `Mention 1-2 of these headlines briefly: ${headlines.slice(0, 4).map((h) => h.title).join(" | ")}` : "No news this time.",
-    input.mode === "gym" || input.mode === "focus" ? "No jokes." : prefs.humor !== "off" ? "Include one short joke in the listener's humor style." : "No jokes.",
-    input.recent?.length ? `Do not reuse these recent lines: ${input.recent.slice(-3).join(" || ")}` : "",
-  ].join("\n");
-  try {
-    const res = await fetch(`${base}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      body: JSON.stringify({ model, messages: [{ role: "system", content: sys }, { role: "user", content: user }], temperature: 0.9 }),
-    });
-    if (!res.ok) return null;
-    const j = await res.json();
-    return j.choices?.[0]?.message?.content?.trim() || null;
-  } catch {
+    `Break number ${index + 1}. Listener's local time: ${timeOfDay}.`,
+    index === 0 ? "This is the show opener: welcome them in." : `Song that just finished: ${trackLine(prev) || "unknown"}.`,
+    `Next song to introduce: ${trackLine(next) || "(none yet, just keep them company)"}.`,
+    isSwitch ? `The listener just switched to ${mode === "default" ? "My Mix" : mode} mode. Say ONE short, fitting transition line (under 12 words) that acknowledges the switch with the new energy, then nothing else. Do not SKIP.` :
+    stinger ? "This is a STINGER: at most ONE short line (under 15 words) said over the song's intro, e.g. a quick fact or vibe about the next song. If you have nothing genuinely interesting, reply SKIP." :
+      "This is a full break: 2 to 4 sentences, under 70 words total. Only say things worth saying; if you truly have nothing good, reply SKIP.",
+    prefs.language === "hindi" || prefs.language === "marathi" ? `Write in ${prefs.language === "hindi" ? "Hindi" : "Marathi"} using Devanagari script (song and artist names may stay in English).` : prefs.language === "hinglish" ? "Write in Hinglish, Roman script." : "Write in English.",
+    wantNews ? `Headlines to weave in (pick one or two): ${headlines.slice(0, 3).map((x) => x.title).join(" | ")}` : "No news in this break.",
+    wantJoke ? "Include one joke with a real punchline in their humor style." : "",
+    input.recent?.length ? `Your recent breaks (do NOT repeat their openers, jokes or phrasing):\n- ${input.recent.slice(-4).join("\n- ")}` : "",
+  ].filter(Boolean).join("\n");
+  const clean = (t?: string | null) => t?.replace(/[*_#`]/g, "").replace(/^(\s*\[[a-z]+\]\s*)?["']/i, "$1").replace(/["']$/, "").replace(/\s+/g, " ").trim() || null;
+  const signal = AbortSignal.timeout(Number(process.env.LLM_TIMEOUT_MS ?? 6000));
+
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  if (anthropicKey) {
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST", signal,
+        headers: { "x-api-key": anthropicKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        body: JSON.stringify({
+          model: process.env.ANTHROPIC_MODEL || "claude-haiku-5-5",
+          max_tokens: 1024, temperature: 1,
+          thinking: { type: "disabled" }, // speed matters more than reasoning for a 3-sentence break
+          system: systemPrompt(prefs, mode),
+          messages: [{ role: "user", content: user }],
+        }),
+      });
+      if (res.ok) {
+        const j = await res.json();
+        const t = clean((j.content ?? []).filter((c: { type: string }) => c.type === "text").map((c: { text: string }) => c.text).join(" "));
+        if (!t) console.error("anthropic: no text", j.stop_reason);
+        if (t) return /^(\[\w+\]\s*)?skip\.?$/i.test(t) ? "" : t;
+      } else console.error("anthropic", res.status, (await res.text()).slice(0, 200));
+    } catch (e) { console.error("anthropic failed", e); }
     return null;
   }
+
+  const key = process.env.OPENAI_API_KEY || process.env.LLM_API_KEY;
+  if (!key) return null;
+  try {
+    const res = await fetch(`${process.env.LLM_BASE_URL || "https://api.openai.com/v1"}/chat/completions`, {
+      method: "POST", signal,
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model: process.env.LLM_MODEL || "gpt-4o-mini", temperature: 0.95,
+        messages: [{ role: "system", content: systemPrompt(prefs, mode) }, { role: "user", content: user }] }),
+    });
+    if (!res.ok) return null;
+    const t = clean((await res.json()).choices?.[0]?.message?.content);
+    return t && /^(\[\w+\]\s*)?skip\.?$/i.test(t) ? "" : t;
+  } catch { return null; }
 }
