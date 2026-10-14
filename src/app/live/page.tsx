@@ -43,6 +43,7 @@ export default function Live() {
   const setDiag = (d: Partial<Diag>) => { diagRef.current = { ...diagRef.current, ...d }; setDiagState(diagRef.current); };
   const connectDeviceRef = useRef<string | null>(null);
   const sdkErrRef = useRef<string | null>(null);
+  const readyIdRef = useRef<string | null>(null);
 
   const stopRef = useRef(false);
   const skipRef = useRef<() => void>(() => {});
@@ -67,6 +68,8 @@ export default function Live() {
         const player = new window.Spotify.Player({ name: "MyRJ Web Player", getOAuthToken: async (cb: (t: string) => void) => cb((await getToken()) ?? ""), volume: SONG_VOL });
         ["account_error", "authentication_error", "initialization_error", "playback_error"].forEach((e) =>
           player.addListener(e, ({ message }: any) => { sdkErrRef.current = `${e}: ${message}`; setDiag({ sdk: `${e}: ${message}` }); }));
+        player.addListener("ready", ({ device_id }: any) => { readyIdRef.current = device_id; setDiag({ sdk: "ready, registering device…" }); });
+        player.addListener("not_ready", () => { readyIdRef.current = null; setDiag({ sdk: "went offline" }); });
         playerRef.current = player;
         setDiag({ sdk: "loaded" });
       } catch (e) { sdkErrRef.current = String(e); setDiag({ sdk: String(e) }); }
@@ -130,8 +133,8 @@ export default function Live() {
   async function findConnectDevice(): Promise<string | null> {
     try {
       const j = await sp<any>("/me/player/devices");
-      const devs = (j.devices ?? []).filter((d: any) => !d.is_restricted && d.id !== deviceRef.current);
-      const d = devs.find((x: any) => x.is_active) ?? devs.find((x: any) => x.type === "Smartphone") ?? devs[0];
+      const devs = (j.devices ?? []).filter((d: any) => !d.is_restricted && !/^MyRJ/i.test(d.name ?? ""));
+      const d = devs.find((x: any) => x.type === "Smartphone" && x.is_active) ?? devs.find((x: any) => x.type === "Smartphone") ?? devs.find((x: any) => x.is_active) ?? devs[0];
       if (d) setDiag({ device: `${d.name} (${d.type}, Spotify Connect)` });
       return d?.id ?? null;
     } catch (e) { setDiag({ error: String(e) }); return null; }
@@ -145,32 +148,44 @@ export default function Live() {
       setDiag({ output: "previews only (Spotify Free: Spotify blocks full playback control)" });
       return "preview";
     }
-    // 1) In-browser player (desktop browsers; Spotify's SDK does not support mobile browsers)
+    // 1) In-browser player (desktop browsers; Spotify's SDK does not support mobile browsers).
+    //    Only ever use the device_id from THIS page's 'ready' event.
     const player = playerRef.current;
     if (player && !sdkErrRef.current) {
-      setDiag({ sdk: "connecting" });
-      const id = await new Promise<string | null>((res) => {
-        player.addListener("ready", ({ device_id }: any) => res(device_id));
-        player.addListener("not_ready", () => res(null));
-        player.connect().then((ok: boolean) => { if (!ok) res(null); });
-        setTimeout(() => res(null), 12000);
-      });
+      setDiag({ sdk: "connecting", device: undefined, error: undefined });
+      readyIdRef.current = null;
+      setStatus("Starting the in-browser Spotify player…");
+      await player.connect();
+      for (let t = 0; t < 30 && !readyIdRef.current && !sdkErrRef.current; t++) await sleep(500);
+      const id = readyIdRef.current;
       if (id) {
         deviceRef.current = id;
-        try {
-          await sp("/me/player", { method: "PUT", body: JSON.stringify({ device_ids: [id], play: false }) });
-          await sleep(800);
-          setDiag({ sdk: "ready", device: "MyRJ Web Player (this browser)", output: "full songs in this browser" });
-          return "sdk";
-        } catch (e) { setDiag({ error: `transfer failed: ${e}` }); }
-      } else setDiag({ sdk: sdkErrRef.current ?? "player never became ready (mobile browsers are not supported by Spotify's web player)" });
+        // New devices take a few seconds to show up on Spotify's side: retry with backoff.
+        for (let attempt = 1; attempt <= 6 && !stopRef.current; attempt++) {
+          try {
+            const devs = await sp<any>("/me/player/devices").then((j) => j.devices ?? []).catch(() => []);
+            if (!devs.some((d: any) => d.id === id)) throw new Error("Spotify 404: device not registered yet");
+            await sp("/me/player", { method: "PUT", body: JSON.stringify({ device_ids: [id], play: false }) });
+            await sleep(600);
+            setDiag({ sdk: "ready", device: "MyRJ Web Player (this browser)", output: "full songs in this browser", error: undefined });
+            return "sdk";
+          } catch (e) {
+            setDiag({ sdk: `registering device (try ${attempt}/6)`, error: `transfer: ${e}` });
+            setStatus(`Waiting for Spotify to register this browser (try ${attempt}/6)…`);
+            await sleep(attempt * 1000);
+          }
+        }
+        setDiag({ sdk: "device never registered with Spotify" });
+      } else setDiag({ sdk: sdkErrRef.current ?? "never became ready (mobile browsers aren't supported by Spotify's web player)" });
+      player.disconnect(); deviceRef.current = null; // don't leave a dead "MyRJ Web Player" device around
     }
     // 2) Spotify Connect: control his Spotify app (phone/desktop)
     setStatus("Looking for your Spotify app…");
     for (let t = 0; t < 20 && !stopRef.current; t++) {
       const d = await findConnectDevice();
       if (d) { connectDeviceRef.current = d; setDiag({ output: "full songs via your Spotify app (Connect)" }); return "connect"; }
-      setStatus("Open the Spotify app on this phone (play/pause anything once), MyRJ will pick it up…");
+      setStatus("No Spotify app found. Open Spotify on your phone or computer and play/pause anything once; MyRJ will pick it up…");
+      setDiag({ device: "searching for your Spotify app…" });
       await sleep(3000);
     }
     setDiag({ output: "previews (no playable Spotify device found)" });
