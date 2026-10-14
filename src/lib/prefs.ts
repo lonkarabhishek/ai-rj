@@ -65,5 +65,5 @@ export const MODES: { id: ListenMode; label: string; emoji: string; blurb: strin
   { id: "default", label: "My Mix", emoji: "📻", blurb: "Your favourites + discoveries", talkEvery: 1 },
   { id: "gym", label: "Gym", emoji: "🏋️", blurb: "High-energy, hype RJ", talkEvery: 1, energy: "hype" },
   { id: "drive", label: "Driving", emoji: "🚗", blurb: "Road-trip singalongs", talkEvery: 1, energy: "hype" },
-  { id: "focus", label: "Work / Focus", emoji: "🎧", blurb: "Instrumental, RJ stays quiet", talkEvery: 4, energy: "chill" },
+  { id: "focus", label: "Focus", emoji: "🎧", blurb: "Work mode: instrumental, RJ stays quiet", talkEvery: 4, energy: "chill" },
 ];

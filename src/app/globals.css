@@ -2,3 +2,5 @@
 
 :root { color-scheme: dark; }
 body { background:#09090b; color:#f4f4f5; font-family: var(--font-geist-sans), system-ui, sans-serif; }
+
+@keyframes eq { 0%, 100% { transform: scaleY(0.3); } 50% { transform: scaleY(1.2); } }

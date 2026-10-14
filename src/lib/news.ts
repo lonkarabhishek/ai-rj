@@ -21,7 +21,8 @@ export async function fetchHeadlines(topics: string[], language: Language, perTo
   const out: Headline[] = [];
   await Promise.all(
     topics.slice(0, 5).map(async (topic) => {
-      const url = `https://news.google.com/rss/search?q=${encodeURIComponent(topic + " when:2d")}&hl=${hl}&gl=IN&ceid=${ceid}`;
+      const q = /^ai$/i.test(topic.trim()) ? '"artificial intelligence" OR OpenAI OR "AI model"' : topic;
+      const url = `https://news.google.com/rss/search?q=${encodeURIComponent(q + " when:2d")}&hl=${hl}&gl=IN&ceid=${ceid}`;
       try {
         const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 MyRJ" } });
         if (!res.ok) return;
