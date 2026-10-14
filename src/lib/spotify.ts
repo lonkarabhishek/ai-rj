@@ -1,4 +1,6 @@
 import { cookies } from "next/headers";
+import { currentUserId } from "@/lib/supabase/server";
+import { loadProviderToken, saveProviderToken } from "@/lib/tokens";
 
 export const SCOPES = [
   "user-read-email", "user-read-private", "user-top-read", "user-library-read",
@@ -30,10 +32,22 @@ export async function getAccessToken(force = false): Promise<string | null> {
   const jar = await cookies();
   const at = jar.get("sp_at")?.value;
   if (at && !force) return at;
-  const rt = jar.get("sp_rt")?.value;
-  if (!rt) return null;
+  let rt = jar.get("sp_rt")?.value;
+  let uid: string | null = null;
+  if (!rt) {
+    // Signed in on a new device/browser: use the Spotify link stored on the account.
+    uid = await currentUserId();
+    const stored = uid ? await loadProviderToken(uid, "spotify") : null;
+    if (!stored) return null;
+    rt = stored.refreshToken;
+    if (stored.scope) jar.set("sp_scope", stored.scope, { ...cookieOpts(), maxAge: 60 * 60 * 24 * 60 });
+  }
   const t = await tokenRequest({ grant_type: "refresh_token", refresh_token: rt });
   jar.set("sp_at", t.access_token, { ...cookieOpts(), maxAge: t.expires_in - 60 });
-  if (t.refresh_token) jar.set("sp_rt", t.refresh_token, { ...cookieOpts(), maxAge: 60 * 60 * 24 * 60 });
+  jar.set("sp_rt", t.refresh_token ?? rt, { ...cookieOpts(), maxAge: 60 * 60 * 24 * 60 });
+  if (t.refresh_token && t.refresh_token !== rt) {
+    uid ??= await currentUserId();
+    if (uid) await saveProviderToken(uid, "spotify", t.refresh_token, jar.get("sp_scope")?.value);
+  }
   return t.access_token;
 }

@@ -72,6 +72,9 @@ function Flow() {
       <Button variant={step === "mode" ? "light" : "primary"} className="mt-8 h-14 w-full" onClick={next} disabled={!canNext}>
         {step === "welcome" ? "Let's go" : step === "mode" ? "Go Live" : "Continue"}
       </Button>
+      {step === "welcome" && process.env.NEXT_PUBLIC_SUPABASE_URL && (
+        <a href="/login?next=/live" className="mt-4 text-center text-sm text-zinc-500 hover:text-white">Already have an account? Sign in</a>
+      )}
     </main>
   );
 }

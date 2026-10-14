@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { DEFAULT_PREFS, ENERGIES, HUMORS, LANGUAGES, MODES, loadPrefs, savePrefs, type Prefs, type TrackInfo } from "@/lib/prefs";
 import { getMe } from "@/lib/spotifyClient";
-import { Chip, Section, Spinner, cx, inputCls } from "./ui";
+import { Button, Chip, Section, Spinner, cx, inputCls } from "./ui";
+import { AccountPanel } from "./account";
 
 export type Up = <K extends keyof Prefs>(k: K, v: Prefs[K]) => void;
 
@@ -223,6 +224,7 @@ export function ExternalPlaylists({ p, up }: { p: Prefs; up: Up }) {
 export function AllPrefs({ p, up, compact, returnTo }: { p: Prefs; up: Up; compact?: boolean; returnTo?: string }) {
   return (
     <div className="space-y-10">
+      <AccountPanel returnTo={returnTo} />
       <Section title="You & your RJ"><NameFields p={p} up={up} /></Section>
       <Section title="Language"><LanguagePicker p={p} up={up} /></Section>
       <Section title="Voice" hint="Tap ▶ to preview."><VoicePicker p={p} up={up} compact={compact} /></Section>
@@ -232,6 +234,7 @@ export function AllPrefs({ p, up, compact, returnTo }: { p: Prefs; up: Up; compa
       <Section title="Default mode"><ModePicker value={p.defaultMode} onChange={(m) => up("defaultMode", m)} /></Section>
       <Section title="Spotify"><SpotifyConnect returnTo={returnTo} /></Section>
       <Section title="Add your music from anywhere" hint="Screenshots from YouTube Music, Apple Music, JioSaavn, a playlist link, or a typed list. MyRJ finds them on Spotify and leans your radio towards them."><MusicImport p={p} up={up} /></Section>
+      <Section title="YouTube" hint="Pull your liked music and playlists from YouTube / YouTube Music."><YouTubeConnect p={p} up={up} returnTo={returnTo} /></Section>
     </div>
   );
 }
@@ -245,6 +248,56 @@ async function shrink(file: File): Promise<string> {
   c.getContext("2d")!.drawImage(img, 0, 0, c.width, c.height);
   URL.revokeObjectURL(url);
   return c.toDataURL("image/jpeg", 0.8);
+}
+
+/** Match songs on Spotify and add new ones to taste seeds. Returns a human summary. */
+async function addSongs(songs: { title: string; artist: string }[], p: Prefs, up: Up, setBusy: (s: string) => void) {
+  setBusy(`Found ${songs.length} songs. Matching on Spotify…`);
+  const { matchTrack } = await import("@/lib/spotifyClient");
+  const matched: TrackInfo[] = [];
+  for (let i = 0; i < songs.length; i += 5) {
+    const batch = await Promise.all(songs.slice(i, i + 5).map((s) => matchTrack(s.title, s.artist)));
+    matched.push(...(batch.filter(Boolean) as TrackInfo[]));
+    setBusy(`Matching on Spotify… ${Math.min(i + 5, songs.length)}/${songs.length}`);
+  }
+  const have = new Set(p.tasteSeeds.map((t) => t.uri));
+  const fresh = matched.filter((t) => t.uri && !have.has(t.uri) && (have.add(t.uri!), true));
+  up("tasteSeeds", [...fresh, ...p.tasteSeeds].slice(0, 300));
+  return matched.length ? `Added ${fresh.length} song${fresh.length === 1 ? "" : "s"}${matched.length - fresh.length ? ` (${matched.length - fresh.length} already there)` : ""}. Your radio will lean into these.` : "Found songs, but couldn't match them on Spotify. Is Spotify connected?";
+}
+
+/** YouTube connect: liked music videos + your playlists -> Spotify matches -> taste seeds. */
+export function YouTubeConnect({ p, up, returnTo = "/settings" }: { p: Prefs; up: Up; returnTo?: string }) {
+  const [st, setSt] = useState<{ configured: boolean; connected: boolean } | null>(null);
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState("");
+  useEffect(() => { fetch("/api/youtube/songs?status").then((r) => r.json()).then(setSt).catch(() => setSt({ configured: false, connected: false })); }, []);
+  async function pull() {
+    setMsg(""); setBusy("Reading your YouTube likes & playlists…");
+    try {
+      const r = await fetch("/api/youtube/songs"); const j = await r.json();
+      if (!r.ok) throw new Error(j.error ?? "YouTube import failed");
+      if (!j.songs.length) { setMsg("No music found in your YouTube likes or playlists yet."); return; }
+      setMsg(await addSongs(j.songs, p, up, setBusy));
+    } catch (e) { setMsg(String(e instanceof Error ? e.message : e)); } finally { setBusy(""); }
+  }
+  if (!st) return <Spinner />;
+  if (!st.configured) return <p className="text-sm text-zinc-500">YouTube sign-in isn&apos;t set up on this server yet.</p>;
+  return (
+    <div className="space-y-3">
+      {st.connected ? (
+        <div className="flex flex-wrap gap-2">
+          <Button variant="light" className="h-11" onClick={pull} disabled={!!busy}>{busy ? <><Spinner /> {busy}</> : "Import likes & playlists"}</Button>
+          <Button variant="ghost" className="h-11" onClick={async () => { await fetch("/api/youtube/disconnect", { method: "POST" }); setSt({ ...st, connected: false }); }}>Disconnect</Button>
+        </div>
+      ) : (
+        <a href={`/api/auth/youtube/login?return=${encodeURIComponent(returnTo)}`} className="inline-flex h-11 items-center gap-2 rounded-full border border-white/10 px-5 text-sm text-white hover:border-white/25">
+          <span className="text-red-500">▶</span> Connect YouTube
+        </a>
+      )}
+      {msg && <p className="text-sm text-zinc-400">{msg}</p>}
+    </div>
+  );
 }
 
 /** "Add your music from anywhere": screenshots, links or a typed list -> Claude -> Spotify matches -> taste seeds. */
@@ -264,19 +317,9 @@ export function MusicImport({ p, up }: { p: Prefs; up: Up }) {
       if (!r.ok) throw new Error(j.error ?? "Import failed");
       const songs = j.songs as { title: string; artist: string }[];
       if (!songs.length) { setMsg("Couldn't spot any songs there. Try a clearer screenshot or a list."); return; }
-      setBusy(`Found ${songs.length} songs. Matching on Spotify…`);
-      const { matchTrack } = await import("@/lib/spotifyClient");
-      const matched: TrackInfo[] = [];
-      for (let i = 0; i < songs.length; i += 5) {
-        const batch = await Promise.all(songs.slice(i, i + 5).map((s) => matchTrack(s.title, s.artist)));
-        matched.push(...(batch.filter(Boolean) as TrackInfo[]));
-        setBusy(`Matching on Spotify… ${Math.min(i + 5, songs.length)}/${songs.length}`);
-      }
-      const have = new Set(p.tasteSeeds.map((t) => t.uri));
-      const fresh = matched.filter((t) => t.uri && !have.has(t.uri) && (have.add(t.uri!), true));
-      up("tasteSeeds", [...fresh, ...p.tasteSeeds].slice(0, 300));
+      const res = await addSongs(songs, p, up, setBusy);
+      setMsg(res);
       setText("");
-      setMsg(matched.length ? `Added ${fresh.length} song${fresh.length === 1 ? "" : "s"}${matched.length - fresh.length ? ` (${matched.length - fresh.length} already there)` : ""}. Your radio will lean into these.` : "Found songs, but couldn't match them on Spotify. Is Spotify connected?");
     } catch (e) { setMsg(String(e instanceof Error ? e.message : e)); }
     finally { setBusy(""); }
   }

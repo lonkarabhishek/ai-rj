@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { cookieOpts, tokenRequest } from "@/lib/spotify";
+import { currentUserId } from "@/lib/supabase/server";
+import { saveProviderToken } from "@/lib/tokens";
 
 export async function GET(req: NextRequest) {
   const u = new URL(req.url);
@@ -11,6 +13,8 @@ export async function GET(req: NextRequest) {
   }
   try {
     const t = await tokenRequest({ grant_type: "authorization_code", code, redirect_uri: process.env.SPOTIFY_REDIRECT_URI! });
+    const uid = await currentUserId();
+    if (uid && t.refresh_token) await saveProviderToken(uid, "spotify", t.refresh_token, (t as { scope?: string }).scope);
     const back = req.cookies.get("sp_return")?.value ?? "/settings";
     const res = NextResponse.redirect(`${origin}${back}${back.includes("?") ? "&" : "?"}spotify=connected`);
     res.cookies.delete("sp_return");

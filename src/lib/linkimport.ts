@@ -14,7 +14,7 @@ function cleanArtist(a: string) {
   return a.replace(/\s*-\s*Topic$/i, "").replace(/VEVO$/i, "").split(/,|&| x | feat\.? /i)[0].trim();
 }
 /** Split "Artist - Title" when the uploader is a label/channel rather than the artist. */
-function toSong(title: string, channel: string): Song | null {
+export function toSong(title: string, channel: string): Song | null {
   let t = cleanTitle(title), a = cleanArtist(channel);
   const label = /t-series|zee music|sony music|saregama|tips|yrf|speed records|eros|times music|desi melodies|vevo|records|music$/i.test(channel);
   const dash = t.match(/^(.+?)\s+[-–]\s+(.+)$/);
