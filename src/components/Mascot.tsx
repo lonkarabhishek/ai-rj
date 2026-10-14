@@ -20,6 +20,8 @@ export function Mascot({ state = "idle", className, getLevel }: { state?: State;
   const tipRef = useRef<SVGCircleElement>(null);
   const smileRef = useRef<SVGPathElement>(null);
   const mouthRef = useRef<SVGEllipseElement>(null);
+  const micRef = useRef<SVGGElement>(null);
+  const micGlowRef = useRef<SVGCircleElement>(null);
   const stateRef = useRef(state); stateRef.current = state;
   const levelRef = useRef(getLevel); levelRef.current = getLevel;
   const [hover, setHover] = useState(false);
@@ -104,6 +106,9 @@ export function Mascot({ state = "idle", className, getLevel }: { state?: State;
         mouthRef.current.setAttribute("rx", (2.4 + open * 0.8).toFixed(2));
         mouthRef.current.style.opacity = show ? "1" : "0"; smileRef.current.style.opacity = show ? "0" : "1";
       }
+      // headset mic: head leans in a touch and glows with the voice
+      micRef.current?.setAttribute("transform", `translate(${(-lvl * 1.2).toFixed(2)} ${(-lvl * 0.4).toFixed(2)})`);
+      if (micGlowRef.current) { micGlowRef.current.setAttribute("r", (3.2 + lvl * 3).toFixed(2)); micGlowRef.current.style.opacity = (lvl * 0.55).toFixed(2); }
       voiceRef.current?.setAttribute("transform", `translate(${bx.toFixed(2)} ${by.toFixed(2)}) rotate(${rot.toFixed(2)} 60 64) translate(60 94) scale(${sx.toFixed(4)} ${sy.toFixed(4)}) translate(-60 -94)`);
       eyesRef.current?.setAttribute("transform", `translate(${ex.toFixed(2)} ${ey.toFixed(2)})`);
       if (tipRef.current) {
@@ -130,6 +135,14 @@ export function Mascot({ state = "idle", className, getLevel }: { state?: State;
             </g>
             <circle ref={tipRef} className="m-tip" cx="82.6" cy="20" r="3.4" fill="#f3efe8" />
             <rect x="14" y="36" width="92" height="58" rx="29" fill="#f3efe8" />
+          </g>
+          {/* radio-host headset mic: thin arm from the right edge curving toward the mouth */}
+          <g transform="rotate(-15 79 66)">
+            <path d="M101.5 57.5 Q101 70.5 89.5 70.6" stroke="#141212" strokeWidth="2" strokeLinecap="round" fill="none" />
+            <g ref={micRef}>
+              <circle ref={micGlowRef} cx="87.6" cy="70.6" r="3.2" fill="#141212" style={{ opacity: 0, filter: "blur(1.5px)" }} />
+              <rect x="84.6" y="68.4" width="5.6" height="4.4" rx="2.2" fill="#141212" />
+            </g>
           </g>
           <g transform="rotate(-15 79 66)" fill="#141212">
             <path ref={smileRef} d="M75.5 65.2 Q79 68.6 82.5 65.2" stroke="#141212" strokeWidth="2.4" strokeLinecap="round" fill="none" />
