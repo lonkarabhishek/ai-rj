@@ -13,6 +13,8 @@ export interface Prefs {
   newsTopics: string[];
   source: "top" | string; // "top" or a Spotify playlist id
   externalPlaylists: { url: string; note?: string; addedAt: string }[];
+  onboarded: boolean;
+  defaultMode: ListenMode;
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -25,6 +27,8 @@ export const DEFAULT_PREFS: Prefs = {
   newsTopics: ["AI"],
   source: "top",
   externalPlaylists: [],
+  onboarded: false,
+  defaultMode: "default",
 };
 
 export const LANGUAGES: { id: Language; label: string }[] = [
@@ -48,7 +52,10 @@ export function loadPrefs(): Prefs {
 }
 export function savePrefs(p: Prefs) {
   localStorage.setItem(KEY, JSON.stringify(p));
+  window.dispatchEvent(new Event("myrj:prefs"));
 }
+/** Treat existing users who already picked a voice as onboarded. */
+export function isOnboarded(p: Prefs) { return p.onboarded || !!p.voiceId; }
 
 export interface TrackInfo {
   name: string;
