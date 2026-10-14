@@ -39,3 +39,10 @@ Early scaffolding. Waiting on API keys to wire up live features.
 - Scripts: template-based by default; set `OPENAI_API_KEY` (+ optional `LLM_BASE_URL`, `LLM_MODEL`) to use an LLM.
 
 Run locally: `npm install && npm run dev -- -H 127.0.0.1`, then open http://127.0.0.1:3000 (use 127.0.0.1, not localhost, for Spotify login).
+
+## Roadmap: scale phase
+
+- **Multi-user accounts** (Supabase Auth: Google + email magic link), per-user prefs, taste seeds and Spotify tokens.
+- **YouTube sign-in** (Google OAuth, `youtube.readonly`): pull liked videos and playlists as taste seeds.
+- **Apple Music sign-in** (MusicKit JS): read library and playlists. Needs an Apple Developer account ($99/yr) and a MusicKit key.
+- **Mobile apps** after the web version is loved.

@@ -1,12 +1,13 @@
 "use client";
 /* eslint-disable @typescript-eslint/no-explicit-any, @next/next/no-img-element */
 import Link from "next/link";
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { isOnboarded, loadPrefs, MODES, type ListenMode, type Prefs, type TrackInfo } from "@/lib/prefs";
 import { Curator, getMe, getToken, getTokenInfo, sp, SpotifyError } from "@/lib/spotifyClient";
 import { AllPrefs, usePrefs } from "@/components/prefs";
 import { cx, Spinner } from "@/components/ui";
+import { Lyrics } from "@/components/Lyrics";
 
 declare global { interface Window { Spotify: any; onSpotifyWebPlaybackSDKReady: () => void } }
 
@@ -51,6 +52,8 @@ function LiveInner() {
   const [drawer, setDrawer] = useState(false);
   const [needReconnect, setNeedReconnect] = useState(false);
   const [speaking, setSpeaking] = useState(false);
+  const voiceClockRef = useRef<(() => [number, number]) | null>(null);
+  const clock = useCallback((): [number, number] => voiceClockRef.current?.() ?? [0, 0], []);
 
   const sessionRef = useRef(0);
   const skipRef = useRef<() => void>(() => {});
@@ -190,9 +193,10 @@ function LiveInner() {
     const from = (await pl.getVolume().catch(() => SONG_VOL)) as number, steps = 10;
     for (let i = 1; i <= steps; i++) { await pl.setVolume(Math.max(0.0001, from + (to - from) * (i / steps))).catch(() => {}); await sleep(ms / steps); }
   }
-  function playClip(url: string, opts: { maxMs?: number; fadeIn?: boolean; bindSkip?: boolean } = {}) {
+  function playClip(url: string, opts: { maxMs?: number; fadeIn?: boolean; bindSkip?: boolean; voice?: boolean } = {}) {
     return new Promise<void>((resolve) => {
       const a = new Audio(url); audioRef.current = a; a.volume = opts.fadeIn ? 0 : 1;
+      if (opts.voice) voiceClockRef.current = () => [a.currentTime, Number.isFinite(a.duration) ? a.duration : 0];
       let done = false;
       const finish = async (fade = false) => { if (done) return; done = true; if (fade) await fadeEl(a, 0, 900); a.pause(); resolve(); };
       a.onended = () => finish(); a.onerror = () => finish();
@@ -255,6 +259,8 @@ function LiveInner() {
       const synth = window.speechSynthesis;
       if (!synth) { log("no browser voice available"); setTimeout(resolve, 3000); return; }
       synth.cancel();
+      const t0 = Date.now(), est = Math.max(2, [...text].length / 13);
+      voiceClockRef.current = () => [(Date.now() - t0) / 1000, est];
       const vs = synth.getVoices();
       const v = vs.find((x) => x.lang === lang) ?? vs.find((x) => x.lang.startsWith(lang.slice(0, 2)));
       // Chrome cuts long utterances (~15s), so speak sentence by sentence.
@@ -384,7 +390,7 @@ function LiveInner() {
     talkingRef.current = (async () => {
       await fadeSdk(DUCK, 700);
       await jingle();
-      await playClip(seg.audioUrl!, { maxMs: 60000, bindSkip: false });
+      await playClip(seg.audioUrl!, { maxMs: 60000, bindSkip: false, voice: true });
       setSpeaking(false);
       if (phaseRef.current === "song") await fadeSdk(SONG_VOL, 1600);
     })().finally(() => { talkingRef.current = null; });
@@ -521,7 +527,7 @@ function LiveInner() {
       await jingle();
       const bed = seg.kind === "full" && seg.script.length > 140;
       if (bed) startBed();
-      try { if (seg.audioUrl) await playClip(seg.audioUrl, { maxMs: 90000 }); else await speakBrowser(seg.script, seg.lang); }
+      try { if (seg.audioUrl) await playClip(seg.audioUrl, { maxMs: 90000, voice: true }); else await speakBrowser(seg.script, seg.lang); }
       finally { bedRef.current?.stop(); }
     };
 
@@ -622,7 +628,7 @@ function LiveInner() {
         {/* stage */}
         <section className="flex flex-1 flex-col items-center justify-center py-8 text-center">
           <div className="relative">
-            <div className={cx("aspect-square w-[min(68vw,280px)] overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)] transition-transform duration-700", phase === "song" ? "scale-100" : "scale-[0.94]")}>
+            <div className={cx("aspect-square w-[min(68vw,280px)] overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)] transition-transform duration-700", speaking || phase === "rj" ? "scale-[0.72]" : phase === "song" ? "scale-100" : "scale-[0.94]")}>
               {art ? <img key={art} src={art} alt="" className="fade-up h-full w-full object-cover" /> : (
                 <div className="relative flex h-full w-full items-center justify-center bg-gradient-to-br from-fuchsia-500/90 via-violet-600/90 to-indigo-700/90">
                   <div className={cx("h-24 w-24 rounded-full bg-white/15 backdrop-blur", live ? "breathe" : "")} />
@@ -640,13 +646,13 @@ function LiveInner() {
           </div>
 
           <div className="mt-10 min-h-[92px] w-full">
-            {phase === "song" || (phase === "waiting" && now) ? (
+            {(phase === "rj" || speaking) && script ? (
+              <Lyrics key={script} text={script} clock={clock} />
+            ) : phase === "song" || (phase === "waiting" && now) ? (
               <div key={now?.uri} className="fade-up">
                 <h1 className="truncate text-[26px] font-semibold tracking-tight">{now?.name}</h1>
                 <p className="mt-1 truncate text-[15px] text-zinc-400">{now?.artists}</p>
               </div>
-            ) : phase === "rj" && script ? (
-              <p key={script} className="fade-up mx-auto line-clamp-4 max-w-sm text-[15px] leading-relaxed text-zinc-300">{script}</p>
             ) : (
               <div className="fade-up">
                 <h1 className="text-[26px] font-semibold tracking-tight">{live ? rjName : `${rjName} is ready`}</h1>
