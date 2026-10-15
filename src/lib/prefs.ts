@@ -25,7 +25,7 @@ export interface Prefs {
 
 export const DEFAULT_PREFS: Prefs = {
   rjName: "RJ Jockey",
-  listenerName: "Abhishek",
+  listenerName: "friend",
   voiceId: "",
   energy: "balanced",
   language: "hinglish",

@@ -1,7 +1,6 @@
 {
   "name": "ai-rj",
   "version": "0.1.0",
-  "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -27,5 +26,31 @@
     "eslint-config-next": "16.4.0",
     "tailwindcss": "^4",
     "typescript": "^5"
-  }
+  },
+  "description": "MyRJ: a personal AI radio jockey. Self-hosted, with Spotify and YouTube playback, Claude-written RJ lines and Azure voice.",
+  "license": "MIT",
+  "author": "Abhishek Lonkar",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lonkarabhishek/ai-rj.git"
+  },
+  "homepage": "https://github.com/lonkarabhishek/ai-rj#readme",
+  "bugs": {
+    "url": "https://github.com/lonkarabhishek/ai-rj/issues"
+  },
+  "keywords": [
+    "ai",
+    "radio",
+    "rj",
+    "nextjs",
+    "spotify",
+    "youtube",
+    "tts",
+    "claude",
+    "self-hosted"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "private": true
 }

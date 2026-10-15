@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
-// One run against PROD APIs (Claude, Azure, news). No Spotify involved.
-const prefs = { rjName: "Riya", listenerName: "Abhishek", language: "english", humor: 2, energy: 2, newsTopics: ["AI"], voiceId: "en-IN-NeerjaNeural", songLangs: ["hindi", "english"], talk: { news: true, jokes: false, facts: true } };
+// Runs against a deployed copy: PROD_URL=https://your-app.vercel.app npm run e2e:prod
+const prefs = { rjName: "Riya", listenerName: "Sam", language: "english", humor: 2, energy: 2, newsTopics: ["AI"], voiceId: "en-IN-NeerjaNeural", songLangs: ["hindi", "english"], talk: { news: true, jokes: false, facts: true } };
 const next = { name: "Kesariya", artists: "Arijit Singh", uri: "spotify:track:x" };
 
 test("prod /api/segment returns a real RJ line quickly", async ({ request }) => {
@@ -13,7 +13,7 @@ test("prod /api/segment returns a real RJ line quickly", async ({ request }) => 
   expect(Date.now() - t0).toBeLessThan(12000);
 });
 test("prod /api/tts returns audio", async ({ request }) => {
-  const r = await request.post("/api/tts", { data: { text: "Hey Abhishek, this is a quick test from your RJ.", voiceId: "en-IN-NeerjaNeural", energy: 2, language: "english" } });
+  const r = await request.post("/api/tts", { data: { text: "Hey there, this is a quick test from your RJ.", voiceId: "en-IN-NeerjaNeural", energy: 2, language: "english" } });
   expect(r.status()).toBe(200);
   expect(r.headers()["content-type"]).toMatch(/audio/);
   expect((await r.body()).length).toBeGreaterThan(5000);

@@ -15,7 +15,7 @@ export default defineConfig({
   projects: [
     { name: "mobile", testIgnore: /prod\.spec/, use: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, userAgent: IPHONE_UA } },
     { name: "desktop", testIgnore: /prod\.spec|api\.spec/, use: { viewport: { width: 1280, height: 800 } } },
-    { name: "prod", testMatch: /prod\.spec/, use: { baseURL: "https://ai-rj.vercel.app" } },
+    ...(process.env.PROD_URL ? [{ name: "prod", testMatch: /prod\.spec/, use: { baseURL: process.env.PROD_URL } }] : []),
   ],
   webServer: [
     { command: `npx next start -p ${PORT}`, port: PORT, reuseExistingServer: true, timeout: 60_000 },
