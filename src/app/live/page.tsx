@@ -86,6 +86,7 @@ function LiveInner() {
   const curatorRef = useRef<AnyCurator | null>(null);
   const ytRef = useRef<YtPlayer | null>(null);
   const ytHostRef = useRef<HTMLDivElement | null>(null);
+  const ytLoadAtRef = useRef(0), ytPlayAtRef = useRef(0), ytAutoRef = useRef(0); // when this song was loaded / first played, and how many times we auto-resumed it
   const ytSelfAtRef = useRef(0); // last time WE paused/stopped the YouTube player (to tell external pauses apart)
   const yt = () => (ytRef.current ??= new YtPlayer());
   const canDuck = () => outRef.current === "sdk" || outRef.current === "youtube";
@@ -212,6 +213,8 @@ function LiveInner() {
       } catch { /* partial support */ }
     }
     const onKey = (e: KeyboardEvent) => {
+      if (e.code === "MediaPlayPause") { e.preventDefault(); togglePause(); return; }
+      if (e.code === "MediaTrackNext") { e.preventDefault(); next(); return; }
       if (e.code !== "Space" || (e.target as HTMLElement)?.closest("input,textarea,button,select")) return;
       e.preventDefault(); togglePause();
     };
@@ -247,8 +250,8 @@ function LiveInner() {
       try { window.speechSynthesis?.pause(); } catch { /* ignore */ }
       await ctxRef.current?.suspend().catch(() => {});
     } else {
+      if (a && voicePausedRef.current) { voicePausedRef.current = false; a.play().catch(() => {}); } // inside the tap's gesture (iOS)
       await ctxRef.current?.resume().catch(() => {});
-      if (a && voicePausedRef.current) { voicePausedRef.current = false; await a.play().catch(() => {}); }
       try { window.speechSynthesis?.resume(); } catch { /* ignore */ }
     }
     if (!musicActiveRef.current) return;
@@ -275,9 +278,7 @@ function LiveInner() {
     ctlBusyRef.current = true;
     try {
       while (appliedPauseRef.current !== pausedRef.current) {
-        const want = pausedRef.current;
-        await sleep(300);
-        if (want !== pausedRef.current) continue;
+        const want = pausedRef.current; // applied at once (no debounce delay): rapid taps are coalesced because only the final state is applied after each call
         try { await applyPause(want); }
         catch (e) {
           log(`${want ? "pause" : "resume"} failed: ${e}`);
@@ -449,7 +450,8 @@ function LiveInner() {
       if (opts.bindSkip !== false) skipRef.current = () => finish(true);
       const arm = (ms: number) => setTimeout(() => { if (pausedRef.current) arm(1000); else finish(true); }, ms);
       arm(opts.maxMs ?? 120000); // safety: never hang on a clip (paused time doesn't count)
-      const start = () => a!.play().then(() => { setDiag({ audio: "ok" }); if (opts.fadeIn) fadeEl(a!, 1, 1500); });
+      // A clip that begins while paused waits (resume plays it) instead of talking over a paused radio.
+      const start = () => (pausedRef.current ? (voicePausedRef.current = true, Promise.resolve()) : a!.play()).then(() => { setDiag({ audio: "ok" }); if (opts.fadeIn) fadeEl(a!, 1, 1500); });
       start().catch((e) => {
         if (done) return;
         const msg = `audio blocked: ${e?.name ?? e}`; log(msg); setDiag({ audio: msg });
@@ -579,8 +581,12 @@ function LiveInner() {
     try {
       const j = await sp<any>("/me/player/devices");
       const devs = (j.devices ?? []).filter((d: any) => !d.is_restricted && !/^MyRJ/i.test(d.name ?? ""));
-      const d = devs.find((x: any) => x.type === "Smartphone" && x.is_active) ?? devs.find((x: any) => x.is_active) ?? devs.find((x: any) => x.type === "Smartphone") ?? devs[0];
+      // Never auto-pick a random device (Alexa/speaker/TV): the phone's own Spotify app first; on a computer, this computer. Nothing else.
+      const mobileUa = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+      const ok = (x: any) => x.type === "Smartphone" || (!mobileUa && x.type === "Computer");
+      const d = devs.find((x: any) => x.type === "Smartphone" && x.is_active) ?? devs.find((x: any) => x.type === "Smartphone") ?? devs.find((x: any) => ok(x) && x.is_active) ?? devs.find(ok);
       if (d) setDiag({ device: `${d.name} (${d.type})` });
+      else if (devs.length) setDiag({ device: `ignored: ${devs.map((x: any) => x.name).join(", ")}` });
       return d?.id ?? null;
     } catch (e) { setDiag({ error: String(e) }); return null; }
   }
@@ -648,8 +654,10 @@ function LiveInner() {
       bootStep("device", "Open the Spotify app and press play once. Looking…");
       await sleep(t < 3 ? 1500 : 3000);
     }
-    setDiag({ output: "previews (no Spotify device found)" });
-    return "preview";
+    // No phone device: don't fall back to 30-second previews or someone else's speaker. YouTube if connected (caller), else a clear instruction.
+    setDiag({ output: "no Spotify device on this phone" });
+    setNotice("Open the Spotify app on your phone, play any song, then tap Retry.");
+    return "none";
   }
 
   async function startOn(device: string, t: TrackInfo) {
@@ -728,8 +736,14 @@ function LiveInner() {
     try {
       await withTimeout(yt().mount(ytHostRef.current), 12000, "YouTube player");
       yt().onState = (st: YtState) => {
-        if (!musicActiveRef.current || Date.now() - ytSelfAtRef.current < 1500) return;
-        if (st === 2 && !pausedRef.current) syncExternal(false);
+        if (st === 1 && !ytPlayAtRef.current) ytPlayAtRef.current = Date.now();
+        if (!musicActiveRef.current || (Date.now() - ytSelfAtRef.current < 1500 && ytLoadAtRef.current <= ytSelfAtRef.current)) return; // our own pause (but not one that arrives after we loaded the next song)
+        if (st === 2 && !pausedRef.current) {
+          // A PAUSED right after load/first play is the browser or YouTube blocking autoplay, not the listener: resume (up to 3x) instead of flipping to "paused".
+          const early = !ytPlayAtRef.current || Date.now() - ytPlayAtRef.current < 2500 || Date.now() - ytLoadAtRef.current < 3000;
+          if (early && ytAutoRef.current < 3 && !document.hidden) { ytAutoRef.current++; log(`YouTube paused itself right after start, resuming (${ytAutoRef.current})`); setTimeout(() => { if (!pausedRef.current) yt().play(); }, 150); return; }
+          syncExternal(false);
+        }
         else if (st === 1 && pausedRef.current && appliedPauseRef.current) syncExternal(true);
       };
       setDiag({ output: "YouTube player (visible)", device: "This browser", error: undefined });
@@ -742,13 +756,15 @@ function LiveInner() {
     const y = yt();
     const talking = !!talkingRef.current;
     y.setVolume01(talking ? DUCK : 0.0001);
+    ytLoadAtRef.current = Date.now(); ytPlayAtRef.current = 0; ytAutoRef.current = 0;
     y.load(t.ytId!);
     let skipped = false;
     skipRef.current = () => { skipped = true; };
     // Wait for real playback; skip videos that can't be embedded (101/150), were removed (100) or won't start.
-    const t0 = Date.now(); let nudged = false;
+    const t0 = Date.now(); let nudged = false, retried = 0;
     while (alive(sid) && !skipped && y.state !== 1 && y.error === null) {
       await sleep(200);
+      if (!pausedRef.current && (y.state as YtState) !== 3 && (y.state as YtState) !== 1 && Math.floor((Date.now() - t0) / 2500) > retried) { retried = Math.floor((Date.now() - t0) / 2500); y.play(); } // stuck unstarted/cued/paused: nudge it
       if (!nudged && Date.now() - t0 > 4000) { nudged = true; setNotice("Tap ▶ on the video to start the music (your browser wants one tap)."); }
       if (Date.now() - t0 > 60000) break;
     }
@@ -762,9 +778,11 @@ function LiveInner() {
     let ready: Segment | null | undefined;
     outro?.then((x) => { ready = x; }).catch(() => { ready = null; });
     let usedOutro = false, fading = false;
+    const tStart = Date.now();
     while (alive(sid) && !skipped) {
       await sleep(400);
       if (pausedRef.current) continue;
+      if (!talkingRef.current && !fading && Date.now() - tStart > 3000 && y.getVolume01() < 0.2) y.setVolume01(SONG_VOL); // never leave a playing song at ~0 volume
       if ((y.state as YtState) === 0) break;
       // Safety net for ads (Premium should be ad-free): another video id or a duration far off from the song's.
       const dur = y.duration(), pos = y.time();
@@ -784,6 +802,7 @@ function LiveInner() {
     return usedOutro;
   }
 
+  const connectFailRef = useRef(0);
   const volSetRef = useRef(false);
   async function playConnect(t: TrackInfo, sid: number) {
     const dev = connectDeviceRef.current!;
@@ -804,7 +823,8 @@ function LiveInner() {
       const st = await sp<any>("/me/player").catch(() => null);
       if (pausedRef.current) { deadline += gap; endsAt += gap; if (st?.is_playing && st.item?.uri === t.uri && appliedPauseRef.current) syncExternal(true); continue; }
       if (started && st?.item?.uri === t.uri && !st.is_playing && st.progress_ms > 0 && st.item.duration_ms - st.progress_ms > 3000) { syncExternal(false); continue; }
-      if (!st?.item) { if (!started && Date.now() - t0 > 15000 && !spotifyBackoffMs()) throw new Error("song never started on device"); continue; }
+      if (!st?.item) { if (!started && Date.now() - t0 > 10000 && !spotifyBackoffMs()) throw new Error("song never started on device"); continue; }
+      if (!started && st.item.uri === t.uri && !st.is_playing && Date.now() - t0 > 6000 && !spotifyBackoffMs()) throw new Error("song paused itself on the device");
       if (st.item.uri !== t.uri) { if (started) break; continue; }
       if (st.is_playing) started = true;
       endsAt = Date.now() + (st.item.duration_ms - st.progress_ms);
@@ -814,6 +834,7 @@ function LiveInner() {
       if (started && !st.is_playing && st.progress_ms === 0) break;
     }
     await sp(`/me/player/pause?device_id=${dev}`, { method: "PUT" }).catch(() => {});
+    connectFailRef.current = 0;
   }
 
   /** Returns true if the song played (or was skipped by the user), false on a playback failure. */
@@ -843,6 +864,13 @@ function LiveInner() {
       if (spotifyBackoffMs() > 0) { log(`rate-limited: waiting ${Math.ceil(spotifyBackoffMs() / 1000)}s`); await sleep(spotifyBackoffMs() + 500); return true; } // not a failure: just wait it out
       setDiag({ error: msg }); log(`playback failed: ${msg}`);
       if (/401/.test(msg)) setNeedReconnect(true);
+      if (o === "connect" && ++connectFailRef.current >= 2 && (await ytConnected())) {
+        connectFailRef.current = 0; log("Spotify device keeps failing: switching to YouTube");
+        setNotice("Spotify isn't playing on your phone, switching to YouTube."); setTimeout(() => setNotice(null), 7000);
+        outRef.current = await setupYoutube();
+        if (outRef.current === "youtube") curatorRef.current = mkCurator(modeRef.current);
+        return false;
+      }
       const elapsed = Date.now() - t0;
       if (elapsed < 4000) await sleep(4000 - elapsed); // never flash past a failure
       return false;
@@ -896,7 +924,7 @@ function LiveInner() {
     // Spotify unavailable (quota used up / not connected): fall back to YouTube if it's connected.
     if (!wantYt && outRef.current === "none" && (await ytConnected())) {
       log("Spotify unavailable: switching to YouTube");
-      setNotice(quotaExceeded ? "Spotify's daily quota is used up, playing from YouTube instead." : "Spotify isn't connected, playing from YouTube instead.");
+      setNotice(quotaExceeded ? "Spotify's daily quota is used up, playing from YouTube instead." : diagRef.current.output?.startsWith("no Spotify device") ? "No Spotify device on your phone, playing from YouTube instead." : "Spotify isn't connected, playing from YouTube instead.");
       setTimeout(() => setNotice(null), 6000);
       bootStep("spotify", "Starting YouTube…");
       outRef.current = await setupYoutube();
@@ -1039,7 +1067,7 @@ function LiveInner() {
             <div className={cx("overflow-hidden rounded-2xl bg-black transition-opacity duration-500", ytShow ? "mb-1 h-[200px] w-[min(86vw,356px)] opacity-100 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]" : "pointer-events-none absolute left-0 top-0 h-[200px] w-[356px] opacity-0")} aria-hidden={!ytShow}>
               <div ref={ytHostRef} className="h-full w-full" />
             </div>
-            <div className={cx("aspect-square transition-transform", ytShow && "hidden", phase === "idle" ? "w-[min(34vw,150px,12svh)] [@media(max-height:700px)]:w-[min(34vw,150px,10svh)]" : "w-[min(64vw,280px,26svh)]", art && "overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]", " duration-700", speaking || phase === "rj" ? "scale-[0.72]" : phase === "song" ? "scale-100" : "scale-[0.94]")}>
+            <div data-testid="art-toggle" onClick={() => { if (live) togglePause(); }} className={cx("aspect-square transition-transform", live && "cursor-pointer", ytShow && "hidden", phase === "idle" ? "w-[min(34vw,150px,12svh)] [@media(max-height:700px)]:w-[min(34vw,150px,10svh)]" : "w-[min(64vw,280px,26svh)]", art && "overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]", " duration-700", speaking || phase === "rj" ? "scale-[0.72]" : phase === "song" ? "scale-100" : "scale-[0.94]")}>
               {art ? <img key={art} src={art} alt="" className="fade-up h-full w-full object-cover" /> : (
                 <div className="relative flex h-full w-full items-center justify-center">
                   <Mascot state={phase === "rj" || speaking ? "talking" : phase === "tuning" || phase === "recovering" ? "tuning" : live ? "live" : "idle"} className="w-[78%]" getLevel={voiceLevel} />
@@ -1080,6 +1108,7 @@ function LiveInner() {
         </section>
 
         {notice && <div className="fade-up glass mb-3 rounded-2xl px-4 py-3 text-center text-sm text-zinc-200">{notice}
+          {notice.startsWith("Open the Spotify app") && <button onClick={() => { setNotice(null); stop(); setTimeout(goLive, 80); }} className="ml-2 font-medium text-[#f3efe8] underline underline-offset-2">Retry</button>}
           {notice.startsWith("Spotify needs a breather") && <button onClick={() => { clearSpotifyBackoff(); setNotice(null); }} className="ml-2 font-medium text-[#f3efe8] underline underline-offset-2">Try now</button>}</div>}
         {needReconnect && <a href="/api/auth/spotify/login?return=/live" className="mb-3 rounded-2xl bg-[#1DB954] px-4 py-3 text-center text-sm font-medium text-black">Reconnect Spotify to keep playing</a>}
 
@@ -1103,17 +1132,17 @@ function LiveInner() {
           {!live ? (
             <button aria-label="Go Live" onClick={goLive} className="h-14 w-full rounded-full bg-[#f3efe8] text-[17px] sm:h-16 font-semibold text-black shadow-[0_12px_44px_-14px_rgba(243,239,232,0.18)] transition active:scale-[0.97]">Go Live</button>
           ) : (
-            <div className="flex w-full items-center justify-center gap-8">
-              <button onClick={() => stop("Off air. Tap Go Live to tune back in.")} className="flex h-12 w-12 items-center justify-center rounded-full text-zinc-400 transition hover:text-white active:scale-90" aria-label="Stop, go off air">
+            <div className="flex w-full items-center justify-center gap-6">
+              <button onClick={() => stop("Off air. Tap Go Live to tune back in.")} className="flex h-14 w-14 items-center justify-center rounded-full text-zinc-400 transition hover:text-white active:scale-90" aria-label="Stop, go off air">
                 <span className="h-3.5 w-3.5 rounded-[3px] bg-current" />
               </button>
-              <button onClick={() => togglePause()} disabled={phase === "tuning" || phase === "recovering"} aria-label={paused ? "Play" : "Pause"} aria-pressed={paused}
-                className="flex h-16 w-16 items-center justify-center rounded-full bg-[#f3efe8] text-[#141210] shadow-[0_12px_44px_-14px_rgba(243,239,232,0.18)] transition active:scale-[0.93] disabled:opacity-40">
+              <button onClick={() => togglePause()} disabled={phase === "tuning"} aria-label={paused ? "Play" : "Pause"} aria-pressed={paused} data-testid="playpause"
+                className="flex h-20 w-20 select-none items-center justify-center rounded-full bg-[#f3efe8] text-[#141210] shadow-[0_12px_44px_-14px_rgba(243,239,232,0.18)] transition active:scale-[0.93] disabled:opacity-40">
                 {paused
                   ? <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z" /></svg>
                   : <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden><rect x="6" y="5" width="4" height="14" rx="1.3" /><rect x="14" y="5" width="4" height="14" rx="1.3" /></svg>}
               </button>
-              <button onClick={next} disabled={phase === "tuning" || phase === "recovering"} className="flex h-12 w-12 items-center justify-center rounded-full text-zinc-400 transition hover:text-white active:scale-90 disabled:opacity-40" aria-label="Next">
+              <button onClick={next} disabled={phase === "tuning" || phase === "recovering"} className="flex h-14 w-14 items-center justify-center rounded-full text-zinc-400 transition hover:text-white active:scale-90 disabled:opacity-40" aria-label="Next">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M5 6.2v11.6a1 1 0 0 0 1.55.83L15 13v4.5a1 1 0 0 0 2 0v-11a1 1 0 0 0-2 0V11L6.55 5.37A1 1 0 0 0 5 6.2Z" /></svg>
               </button>
             </div>

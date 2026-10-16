@@ -1,5 +1,6 @@
 "use client";
 /* YouTube source (client): curation from his likes/playlists/imported links + sparing, cached searches; IFrame player wrapper. */
+import { classifyMood } from "./mood";
 import { isRomantic, NOT_ROMANTIC_RE, ROMANTIC_QUERIES, type ListenMode, type SongLang, type TrackInfo } from "./prefs";
 export const POOL_KEY = "myrj.yt.pool2";
 
@@ -135,7 +136,30 @@ export class YtCurator {
     return matchesLangs(v, this.langs);
   }
 
+  /** Romantic Hindi: his own romantic Hindi songs first (Haiku-labelled, cached 24h), ~1 search recommendation per 3 of his, safe fallbacks. */
+  private async refillRomantic() {
+    const all = await this.loadPool();
+    const cand = all.filter((v) => this.ok(v)).sort(() => Math.random() - 0.5).slice(0, 40);
+    const wantQs = (n: number) => [...ROMANTIC_QUERIES].sort(() => Math.random() - 0.5).slice(0, n);
+    // Classify his songs and run the (capped, cached) searches at the same time, so start-up never waits twice.
+    const [moods, found] = await Promise.all([
+      cand.length ? classifyMood(cand.map((v) => ({ id: v.id, title: v.title, artist: v.channel })), 6000) : Promise.resolve(new Map()),
+      Promise.all(wantQs(cand.length >= 6 ? 1 : 2).map((q) => this.search(q, "hindi"))).then((x) => x.flat().filter((v) => this.ok(v))).catch(() => [] as Tagged[]),
+    ]);
+    const mine = cand.filter((v) => { const m = moods.get(v.id); return !!m?.romantic && (m.lang === "hindi" || m.lang === "unknown"); });
+    const seen = new Set(mine.map((v) => v.id));
+    const pool = found.filter((v) => !seen.has(v.id) && !!seen.add(v.id)).sort(() => Math.random() - 0.5);
+    const nRec = mine.length ? Math.max(1, Math.floor(mine.length / 3)) : 10;
+    const recs = pool.slice(0, nRec).map((v) => ({ ...v, rec: true }));
+    const out: Tagged[] = [];
+    while (mine.length || recs.length) { out.push(...mine.splice(0, 3)); if (recs.length) out.push(recs.shift()!); }
+    // Safe fallback: nothing classified and nothing found -> his Hindi songs (already Hindi-only and not party/remix by title), so the radio still starts.
+    if (!out.length) out.push(...cand.slice(0, 8));
+    this.queue.push(...out.map(toTrack));
+  }
+
   private async refill() {
+    if (isRomantic(this.mode)) return this.refillRomantic();
     const pool = (await this.loadPool()).filter((v) => this.ok(v));
     // His own library is the main source: likes + playlists + imported links.
     const rom = isRomantic(this.mode); // Romantic Hindi: romantic searches only, not the general library

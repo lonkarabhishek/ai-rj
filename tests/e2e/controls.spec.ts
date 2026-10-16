@@ -17,7 +17,7 @@ test("rapid play/pause taps settle on the last state with no racing calls", asyn
   await expect(page.getByRole("button", { name: "Play", exact: true })).toBeVisible(); // flips instantly
   await expect.poll(() => w.player.isPlaying, { timeout: 5000 }).toBe(false);
   const ctl = w.spotifyCalls.slice(before).filter((c) => /player\/(pause|play)$/.test(c.split("?")[0]));
-  expect(ctl.length, "debounced control calls").toBeLessThanOrEqual(2);
+  expect(ctl.length, "control calls (serialized, coalesced)").toBeLessThanOrEqual(3);
   await pauseBtn(page).click();
   await expect.poll(() => w.player.isPlaying, { timeout: 5000 }).toBe(true);
   await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeVisible();

@@ -19,6 +19,7 @@ export interface Faults {
   claudeHang?: boolean;        // /api/segment never answers within the client timeout
   tts502?: boolean;            // /api/tts fails (Azure down)
   noDevices?: boolean;
+  mood500?: boolean;           // /api/songmood fails (classification down)
 }
 export interface Opts { mobile: boolean; prefs?: Record<string, unknown> | null; faults?: Faults; songMs?: number; segmentMs?: number; ttsMs?: number }
 
@@ -33,6 +34,7 @@ export class World {
   segments: any[] = [];
   tts: string[] = [];
   searches: string[] = [];
+  moodCalls: string[][] = [];
   spotifyCalls: string[] = [];
   consoleErrors: string[] = [];
   player = { uri: "", startedAt: 0, pausedAt: 0, isPlaying: false, device: "" };
@@ -183,6 +185,15 @@ export async function setup(ctx: BrowserContext, page: Page, o: Opts) {
     await sleep(o.ttsMs ?? jitter(700, 1400));
     if (f.tts502) return r.fulfill({ status: 502, json: { error: "Azure TTS failed: 502" } }).catch(() => {});
     r.fulfill({ status: 200, contentType: "audio/mpeg", headers: { "x-tts-provider": "azure" }, body: MP3 }).catch(() => {});
+  });
+  // Haiku mood/language labelling of his own songs: the fake world knows each track's true language; romantic unless the title says party/dance.
+  await page.route("**/api/songmood", async (r) => {
+    const b = r.request().postDataJSON(); w.moodCalls.push(b.items.map((x: any) => x.id));
+    await sleep(jitter(150, 400));
+    if (f.mood500) return r.fulfill({ status: 502, json: { labels: {} } });
+    const labels: Record<string, any> = {};
+    for (const it of b.items) { const t = w.tracks.get(it.id); if (t) labels[it.id] = { lang: t.lang, romantic: !/party|dance|remix/i.test(t.name) }; }
+    r.fulfill({ json: { labels } });
   });
   await page.route("**/api/news**", async (r) => { await sleep(jitter(300, 700)); r.fulfill({ json: { headlines: [{ title: "Models get faster again, says a new benchmark today", source: "Wire" }] } }); });
   (w as any).tokenForced = () => tokenForced;

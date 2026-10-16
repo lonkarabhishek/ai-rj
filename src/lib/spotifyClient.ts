@@ -1,4 +1,5 @@
 "use client";
+import { classifyMood } from "./mood";
 import { isRomantic, NOT_ROMANTIC_RE, ROMANTIC_QUERIES, type ListenMode, type SongLang, type TrackInfo } from "./prefs";
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -279,7 +280,7 @@ export class Curator {
       return trusted && !found.size && !g.length; // no signal at all: only trust language-search results
     });
   }
-  private async langTracks(flavour: string[] = [""]): Promise<TrackInfo[]> {
+  private async langTracks(flavour: string[] = [""], maxQueries = 5): Promise<TrackInfo[]> {
     if (!this.langs.length) return [];
     const per: string[][] = [];
     for (const l of this.langs) {
@@ -293,7 +294,7 @@ export class Curator {
     // Round-robin across languages so every chosen language gets searched within the budget.
     const qs: string[] = [];
     for (let i = 0; per.some((x) => x[i]); i++) for (const x of per) if (x[i]) qs.push(x[i]);
-    const raw = (await Promise.all(qs.slice(0, 5).map((q) => this.search(q, 20, this.mode === "focus" ? 20 : 60)))).flat();
+    const raw = (await Promise.all(qs.slice(0, maxQueries).map((q) => this.search(q, 20, this.mode === "focus" ? 20 : 60)))).flat();
     if (this.mode === "focus") return this.instrumentalOnly(raw);
     const mapped = this.map(raw);
     return this.byLang(isRomantic(this.mode) ? mapped.filter((t) => !NOT_ROMANTIC_RE.test(t.name)) : mapped, true);
@@ -448,8 +449,20 @@ export class Curator {
     if (this.round === 0 || poolsEmpty) await this.loadBase();
     this.round++;
     if (isRomantic(this.mode)) {
-      // Romantic Hindi: only Hindi romantic searches (never the listener's general favourites, which may be party/other languages).
-      const batch = this.take(await this.langTracks(["", "love", "romantic"]), 10).sort(() => Math.random() - 0.5);
+      // Romantic Hindi: HIS OWN romantic Hindi songs first (top/saved/playlists, labelled by Haiku: Hindi + romantic, cached 24h), then ~1 search
+      // recommendation per 3 of his. The classification costs no Spotify calls, and only one language search runs when he has enough songs.
+      const seen = new Set<string>();
+      const own = [...(this.pools.top ?? []), ...(this.pools.saved ?? []), ...(this.pools.playlists ?? [])].filter((t) => t.uri && !NOT_ROMANTIC_RE.test(t.name) && !seen.has(t.uri) && !!seen.add(t.uri));
+      const cand = this.take(own, 40);
+      const [moods, searched] = await Promise.all([
+        cand.length ? classifyMood(cand.map((t) => ({ id: t.uri!, title: t.name, artist: t.artists })), 6000) : Promise.resolve(new Map()),
+        this.langTracks(["", "love", "romantic"], cand.length >= 6 ? 1 : 3).catch(() => [] as TrackInfo[]),
+      ]);
+      const mine = cand.filter((t) => { const m = moods.get(t.uri!); return !!m?.romantic && m.lang === "hindi"; });
+      const mineIds = new Set(mine.map((t) => t.uri));
+      const recs = this.take(searched.filter((t) => !mineIds.has(t.uri)), mine.length ? Math.max(1, Math.floor(mine.length / 3)) : 10);
+      const batch: TrackInfo[] = [];
+      while (mine.length || recs.length) { batch.push(...mine.splice(0, 3)); if (recs.length) batch.push(recs.shift()!); }
       this.queue.push(...batch);
       if (!batch.length && this.played.size) this.played.clear();
       return;
