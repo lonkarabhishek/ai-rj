@@ -3,6 +3,11 @@
 MyRJ is a personal AI radio station. Pick a mode, tap **Go Live**, and an RJ with a calm, human-ish voice talks between your songs: a quick intro, a joke, a headline or a fun fact about the track. Then the music plays from **Spotify** or **YouTube**. It's built to be **self-hosted**: you run your own copy with your own keys and have fun.
 
 <p align="center">
+  <img src="docs/myrj-demo.gif" alt="MyRJ demo: pick a mode, Go Live, and the RJ talks between songs" width="300">
+</p>
+<p align="center"><a href="docs/myrj-launch.mp4">Watch the 20-second launch video</a></p>
+
+<p align="center">
   <img src="docs/start-mobile.png" alt="MyRJ start screen on mobile" width="260">
   <img src="docs/live-mobile.png" alt="MyRJ live screen on mobile" width="260">
   <img src="docs/settings-mobile.png" alt="MyRJ settings on mobile" width="260">
