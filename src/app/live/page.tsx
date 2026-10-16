@@ -89,7 +89,10 @@ function LiveInner() {
   const ytLoadAtRef = useRef(0), ytPlayAtRef = useRef(0), ytAutoRef = useRef(0); // when this song was loaded / first played, and how many times we auto-resumed it
   const ytSelfAtRef = useRef(0); // last time WE paused/stopped the YouTube player (to tell external pauses apart)
   const yt = () => (ytRef.current ??= new YtPlayer());
-  const canDuck = () => outRef.current === "sdk" || outRef.current === "youtube";
+  // iOS/iPadOS ignore the YouTube iframe's setVolume (the song stays at full volume and drowns or fights the RJ voice), so there the RJ
+  // never talks OVER a YouTube song: she speaks in the gap between songs while the video is paused/ended.
+  const ytNoDuck = () => typeof window !== "undefined" && (!!(window as any).__noDuck || /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
+  const canDuck = () => outRef.current === "sdk" || (outRef.current === "youtube" && !ytNoDuck());
   const mkCurator = (m: ListenMode): AnyCurator => outRef.current === "youtube"
     ? new YtCurator(m, effectiveSongLangs(m, loadPrefs().songLangs), (loadPrefs().externalPlaylists ?? []).map((x) => x.url), loadPrefs().tasteSeeds ?? [])
     : new Curator(m, loadPrefs().tasteSeeds ?? [], effectiveSongLangs(m, loadPrefs().songLangs));
@@ -792,9 +795,9 @@ function LiveInner() {
       setStatus("");
       if (dur) setProgress(pos / dur);
       const left = dur ? (dur - pos) * 1000 : Infinity;
-      if (!usedOutro && !talkingRef.current && left <= 10000 && left > 4000 && ready?.audioUrl && ready.kind !== "switch") { usedOutro = true; talkOver(ready); }
+      if (!usedOutro && !talkingRef.current && left <= 10000 && left > 4000 && ready?.audioUrl && ready.kind !== "switch" && canDuck()) { usedOutro = true; talkOver(ready); }
       if (talkingRef.current) { if (left <= 700) break; continue; }
-      if (!fading && left <= 3200) { fading = true; fadeSdk(0.0001, 2600); }
+      if (!fading && left <= 3200 && canDuck()) { fading = true; fadeSdk(0.0001, 2600); }
       if (left <= 500) break;
     }
     if (skipped) await fadeSdk(0.0001, 600);
@@ -904,7 +907,9 @@ function LiveInner() {
     const t0 = performance.now(), times: string[] = [];
     const timed = <T,>(name: string, pr: Promise<T>) => pr.finally(() => { times.push(`${name} ${((performance.now() - t0) / 1000).toFixed(1)}s`); setDiag({ timings: times.join(" · ") }); });
     const wantYt = loadPrefs().music === "youtube";
-    if (wantYt) { outRef.current = "youtube"; ytRef.current?.setVolume01(0); ytRef.current?.play(); } // inside the tap: unlocks the player on iOS
+    if (wantYt) { outRef.current = "youtube"; ytRef.current?.setVolume01(0); ytRef.current?.play();
+      // iOS ignores setVolume, so that unlock-play would be audible under the RJ intro: stop it again unless a real song has loaded since.
+      if (ytNoDuck()) { const at = Date.now(); setTimeout(() => { if (ytLoadAtRef.current < at && ytRef.current) { ytSelfAtRef.current = Date.now(); ytRef.current.pause(); } }, 350); } } // inside the tap: unlocks the player on iOS
     bootStep("spotify", wantYt ? "Starting YouTube…" : "Connecting to Spotify…");
     let curator: AnyCurator = wantYt ? mkCurator(modeRef.current) : new Curator(modeRef.current, loadPrefs().tasteSeeds ?? [], effectiveSongLangs(modeRef.current, loadPrefs().songLangs));
     const nextFrom = async (c: AnyCurator | null): Promise<TrackInfo | null> => {

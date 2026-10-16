@@ -137,3 +137,32 @@ test("YouTube: his library + imported links come first; recommendations are from
   for (const q of y.searches) expect(q, "taste search, not generic").toMatch(/^(Coldplay|Coldplay - Topic|Mohit Chauhan - Topic|A\.R\. Rahman - Topic|Mohit Chauhan|A\.R\. Rahman) songs$/);
   console.log("searches:", y.searches);
 });
+
+test("YouTube on iOS (no setVolume): the RJ line plays to the very end and never overlaps the video", async ({ context, page }, ti) => {
+  const w = await setup(context, page, { mobile: mob(ti.project.name), prefs: prefsYt({ songLangs: ["any"] }), segmentMs: 300, ttsMs: 200 });
+  const y = await setupYt(page, { pool: POOL(), songSec: 10 });
+  await page.addInitScript(() => {
+    (window as any).__noDuck = true;
+    const W = window as any; W.__voice = { ended: [] as number[][], overlap: 0 };
+    const orig = HTMLMediaElement.prototype.play;
+    HTMLMediaElement.prototype.play = function (this: HTMLMediaElement) {
+      if (!(this as any).__w) { (this as any).__w = true; this.addEventListener("ended", () => W.__voice.ended.push([this.currentTime, this.duration])); }
+      return orig.call(this);
+    };
+    setInterval(() => {
+      const p = W.__yt?.players?.[0]; if (!p || p.state !== 1) return;
+      for (const a of Array.from(document.querySelectorAll("audio")) as HTMLAudioElement[]) if (!a.paused && !a.ended) { W.__voice.overlap++; (W.__voice.dbg ??= []).push([Date.now(), "el", a.src.slice(-20), a.currentTime, p.t, p.id]); }
+      for (const a of (W.__audios ?? [])) if (!a.paused && !a.ended) { W.__voice.overlap++; (W.__voice.dbg ??= []).push([Date.now() % 100000, a.src.slice(-15), a.currentTime, a.duration, p.t, p.id, p.state]); }
+    }, 50);
+    const A = window.Audio; (window as any).__audios = [];
+    (window as any).Audio = function (...args: any[]) { const a = new (A as any)(...args); W.__audios.push(a); return a; } as any;
+  });
+  await page.goto("/live"); await goLive(page, w);
+  await expect.poll(() => y.loads.length, { timeout: 60000 }).toBeGreaterThan(3);
+  const v = await page.evaluate(() => (window as any).__voice);
+  expect(v.ended.length, "RJ lines finished").toBeGreaterThan(0);
+  const real = v.ended.filter(([, d]: number[]) => d > 0);
+  expect(real.length, "voice lines that ended").toBeGreaterThan(0);
+  for (const [t, d] of real) expect(t, "voice played to its end").toBeGreaterThanOrEqual(d - 0.3);
+  expect(v.overlap, "voice samples while the video was playing").toBe(0);
+});
