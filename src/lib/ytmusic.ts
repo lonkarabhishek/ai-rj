@@ -20,6 +20,7 @@ export async function details(ids: string[], token: string | null, allowLong = f
     for (const v of j.items) {
       const sec = iso(v.contentDetails?.duration);
       if (!v.status?.embeddable || v.contentDetails?.contentRating?.ytRating === "ytAgeRestricted" || v.status?.privacyStatus === "private") continue;
+      if (/\b(full album|compilation|jukebox|non[- ]?stop|reaction|reacts?|live ?stream|livestream|podcast|interview|trailer|full movie|\d+ hours?)\b/i.test(v.snippet?.title ?? "") || v.snippet?.liveBroadcastContent === "live" || v.snippet?.liveBroadcastContent === "upcoming") continue;
       if (sec < 60 || (!allowLong && sec > 600)) continue;
       out.push({ id: v.id, title: v.snippet?.title ?? "", channel: (v.snippet?.channelTitle ?? "").replace(/\s*-\s*Topic$/i, ""), seconds: sec, image: v.snippet?.thumbnails?.high?.url ?? v.snippet?.thumbnails?.medium?.url,
         audioLang: (v.snippet?.defaultAudioLanguage ?? v.snippet?.defaultLanguage ?? "").toLowerCase() || undefined, topic: / - Topic$/i.test(v.snippet?.channelTitle ?? "") });

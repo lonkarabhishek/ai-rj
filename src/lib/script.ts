@@ -1,3 +1,5 @@
+import { stripTags } from "@/lib/text";
+export { stripTags };
 import type { Prefs, TrackInfo, Humor, Language, ListenMode } from "./prefs";
 import type { Headline } from "./news";
 
@@ -264,9 +266,8 @@ Like real FM, you only talk when you have something worth saying: an interesting
 /** Writes the RJ script with an LLM. Anthropic Claude first, then any OpenAI-compatible API. Null on failure/timeout. */
 export function splitMood(t: string): { mood?: "hype" | "cheerful" | "warm" | "calm"; text: string } {
   const m = t.match(/^\s*\[([a-z]+)\]\s*/i);
-  if (!m) return { text: t };
-  const tag = m[1].toLowerCase();
-  return { mood: (["hype", "cheerful", "warm", "calm"].includes(tag) ? tag : undefined) as "hype" | undefined, text: t.slice(m[0].length).trim() };
+  const mood = m && (["hype", "cheerful", "warm", "calm"].includes(m[1].toLowerCase()) ? (m[1].toLowerCase() as "hype") : undefined);
+  return { mood: mood || undefined, text: stripTags(t) };
 }
 
 export async function llmScript(input: SegmentInput): Promise<string | null> {

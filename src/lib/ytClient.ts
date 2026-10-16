@@ -65,6 +65,13 @@ const LQ: Record<Exclude<SongLang, "any">, { q: string[]; focus: string }> = {
 };
 const MODEQ: Record<ListenMode, string> = { default: "", gym: "workout", drive: "road trip", focus: "" };
 const INSTR = /instrumental|lofi|lo-fi|piano|flute|ambient|bgm|study|beats|guitar|sitar|santoor|violin/i;
+/** Titles that are not a single song: compilations, albums, reactions, streams, mixes, podcasts. */
+export const NOT_A_SONG = /\b(full album|full ep|album stream|compilation|jukebox|non[- ]?stop|nonstop|mashup mix|megamix|reaction|reacts?|reacting|live ?stream|livestream|live now|24\/7|podcast|interview|trailer|teaser|making of|behind the scenes|tutorial|how to|review|top \d+|best of|\d+ (hours?|hrs?)|hour(s)? (mix|of)|playlist|full movie|full video album|karaoke|ringtone)\b/i;
+export function looksLikeSong(v: { title: string; seconds: number }, focus = false) {
+  if (NOT_A_SONG.test(v.title)) return false;
+  if (v.seconds && v.seconds > (focus ? 900 : 600)) return false;
+  return true;
+}
 const VOCALY = /lyric|lyrics|feat\.|ft\.|official (music )?video|vocal|cover|\bsong\b/i;
 
 function toTrack(v: YtVideo): TrackInfo {
@@ -120,6 +127,7 @@ export class YtCurator {
   }
 
   private ok(v: Tagged) {
+    if (!looksLikeSong(v, this.mode === "focus")) return false;
     if (this.bad.has(v.id) || this.played.has(`yt:${v.id}`) || this.queue.some((q) => q.ytId === v.id)) return false;
     if (this.mode === "focus") return INSTR.test(v.title) && !VOCALY.test(v.title) && matchesLangsFocus(v, this.langs);
     if (v.seconds > 600) return false;
