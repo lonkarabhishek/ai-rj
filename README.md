@@ -1,24 +1,48 @@
-# MyRJ 🎙️ your own AI radio jockey
+<p align="center">
+  <img src="docs/mascot.svg" alt="MyRJ mascot" width="96">
+</p>
 
-MyRJ is a personal AI radio station. Pick a mode, tap **Go Live**, and an RJ with a calm, human-ish voice talks between your songs: a quick intro, a joke, a headline or a fun fact about the track. Then the music plays from **Spotify** or **YouTube**. It's built to be **self-hosted**: you run your own copy with your own keys and have fun.
+<h1 align="center">MyRJ</h1>
+<p align="center"><b>Your own AI radio jockey for Spotify &amp; YouTube.</b><br>
+An RJ with a calm, human voice talks between your songs: intros, jokes, headlines and song facts in Hindi, English, Hinglish or Marathi.</p>
 
 <p align="center">
-  <img src="docs/myrj-demo.gif" alt="MyRJ demo: pick a mode, Go Live, and the RJ talks between songs" width="300">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-f3efe8?style=flat-square&labelColor=141210"></a>
+  <img alt="Next.js" src="https://img.shields.io/badge/Next.js-16-f3efe8?style=flat-square&labelColor=141210&logo=nextdotjs">
+  <img alt="Spotify" src="https://img.shields.io/badge/Spotify-supported-1DB954?style=flat-square&labelColor=141210&logo=spotify&logoColor=white">
+  <img alt="YouTube" src="https://img.shields.io/badge/YouTube-supported-FF0033?style=flat-square&labelColor=141210&logo=youtube&logoColor=white">
+  <img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-bring%20your%20own%20keys-f3efe8?style=flat-square&labelColor=141210">
 </p>
-<p align="center"><a href="docs/myrj-launch.mp4">Watch the 20-second launch video</a></p>
 
 <p align="center">
-  <img src="docs/start-mobile.png" alt="MyRJ start screen on mobile" width="260">
-  <img src="docs/live-mobile.png" alt="MyRJ live screen on mobile" width="260">
-  <img src="docs/settings-mobile.png" alt="MyRJ settings on mobile" width="260">
+  <a href="docs/myrj-launch.mp4"><b>▶ Watch the HD demo (1080×1920 MP4)</b></a> ·
+  <a href="#quickstart-about-10-minutes">Quickstart</a> ·
+  <a href="#recommended-voices">Voices</a> ·
+  <a href="AGENTS.md">AGENTS.md</a>
 </p>
-<p align="center"><img src="docs/start-desktop.png" alt="MyRJ on desktop" width="640"></p>
+
+> 🤖 Using an AI coding agent? Point it at [AGENTS.md](AGENTS.md) and it can set this up for you.
+
+<p align="center">
+  <a href="docs/myrj-launch.mp4"><img src="docs/myrj-demo.gif" alt="MyRJ demo: pick a mode, Go Live, and the RJ talks between songs. Click for the HD video." width="320"></a>
+</p>
+
+MyRJ is a personal AI radio station. Pick a mode, tap **Go Live**, and your RJ talks between songs, then the music plays from **Spotify** or **YouTube**. It's built to be **self-hosted**: you run your own copy with your own keys and have fun.
+
+<table align="center">
+  <tr>
+    <td align="center"><img src="docs/start-mobile.png" alt="Start screen" width="220"><br><sub>Pick a mode</sub></td>
+    <td align="center"><img src="docs/live-mobile.png" alt="Live screen" width="220"><br><sub>RJ on air</sub></td>
+    <td align="center"><img src="docs/settings-mobile.png" alt="Settings" width="220"><br><sub>Make it yours</sub></td>
+  </tr>
+  <tr><td colspan="3" align="center"><img src="docs/start-desktop.png" alt="MyRJ on desktop" width="660"><br><sub>Desktop</sub></td></tr>
+</table>
 
 ## Features
 
 - **Modes:** My Mix, Gym, Driving and Focus (Focus plays only non-lyrical music).
 - **Languages:** the RJ speaks Hindi, English, Hinglish or Marathi. You also choose which languages your *songs* are in, and YouTube picks are strictly filtered to them.
-- **Music sources:** Spotify (Web Playback SDK on desktop, Spotify Connect on phones) and YouTube (embedded player, ad-free with YouTube Premium).
+- **Music sources:** **Spotify** (Web Playback SDK on desktop, Spotify Connect on phones) and **YouTube** (embedded player, ad-free with YouTube Premium). YouTube mode skips albums, compilations, reactions and live streams.
 - **Talks about what you want:** toggle news, jokes and song facts per session, or go "just music".
 - **Voice:** Azure Speech (free tier friendly), optional ElevenLabs, browser speech as a fallback. Soft background intro/outro music and music ducking while the RJ talks.
 - **Mascot:** a small animated pill-shaped robot that glances at you, reacts to taps and "speaks" along with the RJ.
@@ -94,6 +118,21 @@ All variables are listed with comments in [`.env.example`](.env.example).
 4. Authentication → Providers → **Google**: paste your Google client ID and secret.
 5. Authentication → URL Configuration: set **Site URL** to your deployed URL and add `…/auth/callback` (and `http://127.0.0.1:3000/auth/callback`) to Redirect URLs.
 6. Magic-link emails use Supabase's built-in mailer, which is heavily rate limited. Add custom SMTP before inviting people.
+
+## Recommended voices
+
+MyRJ uses [Azure neural voices](https://learn.microsoft.com/azure/ai-services/speech-service/language-support?tabs=tts). These names were checked against Azure's live voice list (`/cognitiveservices/voices/list`) and all exist. Pick calm voices for a soothing RJ.
+
+| Language | Female (calm, default first) | Male option |
+| --- | --- | --- |
+| Hindi | `hi-IN-SwaraNeural` (default), `hi-IN-AartiNeural` | `hi-IN-MadhurNeural`, `hi-IN-ArjunNeural` |
+| English (India) | `en-IN-NeerjaNeural` (default), `en-IN-AartiNeural` | `en-IN-PrabhatNeural`, `en-IN-ArjunNeural` |
+| Marathi | `mr-IN-AarohiNeural` (default) | `mr-IN-ManoharNeural` |
+| English, multilingual | `en-US-AvaMultilingualNeural` | `en-US-AndrewMultilingualNeural` |
+
+`en-US-AvaNeural` and `en-US-JennyNeural` also exist in Azure and sound great, but MyRJ's picker only lists India-locale and multilingual voices. To add them, extend the filter in `listAzureVoices()` in `src/lib/tts.ts`.
+
+**Switching voice:** there is no env var for it. Open **Settings → Voice** (tap ▶ to preview) and choose one; it's saved per browser, and per account if you sign in. The defaults per RJ language live in `defaultAzureVoice()` in `src/lib/tts.ts`. The region comes from `AZURE_SPEECH_REGION`. Setting `ELEVENLABS_API_KEY` adds ElevenLabs voices to the same picker.
 
 ## Cost notes
 
