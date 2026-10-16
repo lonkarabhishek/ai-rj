@@ -13,6 +13,7 @@ export class YtWorld {
 }
 const SDK = (songSec: number) => `(() => {
   const st = { ON: 1 };
+  document.addEventListener('click', () => { window.__gesture = true; setTimeout(() => { window.__gesture = false; }, 0); }, true);
   window.__yt = { calls: [], players: [], ev: [] };
   window.YT = { PlayerState: { ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 }, Player: class {
     constructor(el, o) { this.o = o; this.vol = 100; this.state = -1; this.t = 0; this.id = ""; this.dur = 0; window.__yt.players.push(this);
@@ -23,9 +24,9 @@ const SDK = (songSec: number) => `(() => {
     loadVideoById(a) { const id = a.videoId || a; this.id = id; this.t = 0; window.__yt.calls.push('load:' + id);
       fetch('/__yt/load?id=' + id).catch(() => {});
       if (id.startsWith('bad')) { setTimeout(() => this.o.events.onError && this.o.events.onError({ data: 150 }), 300); return; }
-      this.dur = ${songSec}; this.set(3); setTimeout(() => { if (this.id === id && !window.__ytBlock) { this.set(1); if (window.__ytPauseAfterPlay) setTimeout(() => { if (this.id === id && this.state === 1) { this.blocked = id; this.set(2); } }, 700); } }, 400); }
+      this.dur = ${songSec}; if (window.__ytStrict && !window.__gesture) { this.set(5); return; } this.set(3); setTimeout(() => { if (this.id === id && !window.__ytBlock) { this.set(1); if (window.__ytPauseAfterPlay) setTimeout(() => { if (this.id === id && this.state === 1) { this.blocked = id; this.set(2); } }, 700); } }, 400); }
     cueVideoById(a) { this.id = a.videoId || a; this.set(5); }
-    playVideo() { window.__yt.calls.push('play'); if (this.id && this.dur) this.set(1); }
+    playVideo() { window.__yt.calls.push('play' + (window.__gesture ? ':g' : '')); if (window.__ytStrict && !window.__gesture) return; if (this.id && this.dur) this.set(1); }
     pauseVideo() { window.__yt.calls.push('pause'); if (this.state === 1) this.set(2); }
     stopVideo() { this.set(0); }
     setVolume(v) { this.vol = v; } getVolume() { return this.vol; }

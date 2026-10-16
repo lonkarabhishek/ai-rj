@@ -64,6 +64,8 @@ function LiveInner() {
   const skipRef = useRef<() => void>(() => {});
   // ---- playback control: one source of truth. desired (optimistic, what the button shows) vs applied (what we told Spotify/audio) ----
   const [paused, setPaused] = useState(false);
+  const [ytStalled, setYtStalled] = useState(false); // YouTube should be playing but the player isn't (iOS blocked the start): show Tap to play
+
   const [picker, setPicker] = useState(false);
   const [pickerMode, setPickerMode] = useState<ListenMode>("default");
   const [pickerLangs, setPickerLangs] = useState("");
@@ -231,6 +233,24 @@ function LiveInner() {
       try { const c = JSON.parse(localStorage.getItem("myrj.yt.pool2") ?? "null"); const v = c?.v?.[0]; if (v && !yt().current) yt().cue(v.id); } catch { /* ignore */ }
     }).catch(() => {});
   }, [prefs.music]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (prefs.music !== "youtube") return;
+    const id = setInterval(() => {
+      const y = ytRef.current;
+      const should = !!y && outRef.current === "youtube" && musicActiveRef.current && !pausedRef.current && !talkingRef.current && phaseRef.current === "song";
+      const stalled = should && y!.state !== 1 && y!.state !== 3 && Date.now() - ytLoadAtRef.current > 3000;
+      setYtStalled((v) => (v === stalled ? v : stalled));
+    }, 500);
+    return () => clearInterval(id);
+  }, [prefs.music]);
+  /** Runs inside the user's tap: iOS only starts the video from a direct gesture. */
+  function tapToPlay() {
+    const y = yt(); setYtStalled(false); ytAutoRef.current = 0;
+    if (pausedRef.current) setPausedState(false);
+    y.play();
+    setTimeout(() => { if (y.state !== 1 && y.state !== 3 && y.current) y.load(y.current); }, 1500);
+  }
 
   const phaseRef = useRef<Phase>("idle");
   useEffect(() => { phaseRef.current = phase; if (phase !== "tuning") setBoot(null); }, [phase]);
@@ -907,9 +927,7 @@ function LiveInner() {
     const t0 = performance.now(), times: string[] = [];
     const timed = <T,>(name: string, pr: Promise<T>) => pr.finally(() => { times.push(`${name} ${((performance.now() - t0) / 1000).toFixed(1)}s`); setDiag({ timings: times.join(" · ") }); });
     const wantYt = loadPrefs().music === "youtube";
-    if (wantYt) { outRef.current = "youtube"; ytRef.current?.setVolume01(0); ytRef.current?.play();
-      // iOS ignores setVolume, so that unlock-play would be audible under the RJ intro: stop it again unless a real song has loaded since.
-      if (ytNoDuck()) { const at = Date.now(); setTimeout(() => { if (ytLoadAtRef.current < at && ytRef.current) { ytSelfAtRef.current = Date.now(); ytRef.current.pause(); } }, 350); } } // inside the tap: unlocks the player on iOS
+    if (wantYt) { outRef.current = "youtube"; ytRef.current?.setVolume01(0); ytRef.current?.play(); } // inside the tap: unlocks the player on iOS (never stop it again: that cancelled the only user-gesture start iOS gives us)
     bootStep("spotify", wantYt ? "Starting YouTube…" : "Connecting to Spotify…");
     let curator: AnyCurator = wantYt ? mkCurator(modeRef.current) : new Curator(modeRef.current, loadPrefs().tasteSeeds ?? [], effectiveSongLangs(modeRef.current, loadPrefs().songLangs));
     const nextFrom = async (c: AnyCurator | null): Promise<TrackInfo | null> => {
@@ -1069,8 +1087,9 @@ function LiveInner() {
         <section className="flex min-h-0 flex-1 flex-col items-center justify-center py-2 text-center sm:py-8">
           <div className="relative">
             {/* Visible YouTube player (official IFrame API). Always mounted so it keeps playing; shown while a song plays. */}
-            <div className={cx("overflow-hidden rounded-2xl bg-black transition-opacity duration-500", ytShow ? "mb-1 h-[200px] w-[min(86vw,356px)] opacity-100 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]" : "pointer-events-none absolute left-0 top-0 h-[200px] w-[356px] opacity-0")} aria-hidden={!ytShow}>
+            <div className={cx("overflow-hidden rounded-2xl bg-black transition-opacity duration-500", ytShow ? "relative mb-1 h-[200px] w-[min(86vw,356px)] opacity-100 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]" : "pointer-events-none absolute left-0 top-0 h-[200px] w-[356px] opacity-0")} aria-hidden={!ytShow}>
               <div ref={ytHostRef} className="h-full w-full" />
+              {ytShow && ytStalled && <button data-testid="tap-to-play" onClick={tapToPlay} className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-black/70 text-white"><span className="flex h-16 w-16 items-center justify-center rounded-full bg-[#f3efe8] text-[#141210]"><svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z" /></svg></span><span className="text-sm font-medium">Tap to play</span></button>}
             </div>
             <div data-testid="art-toggle" onClick={() => { if (live) togglePause(); }} className={cx("aspect-square transition-transform", live && "cursor-pointer", ytShow && "hidden", phase === "idle" ? "w-[min(34vw,150px,12svh)] [@media(max-height:700px)]:w-[min(34vw,150px,10svh)]" : "w-[min(64vw,280px,26svh)]", art && "overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]", " duration-700", speaking || phase === "rj" ? "scale-[0.72]" : phase === "song" ? "scale-100" : "scale-[0.94]")}>
               {art ? <img key={art} src={art} alt="" className="fade-up h-full w-full object-cover" /> : (
@@ -1141,9 +1160,9 @@ function LiveInner() {
               <button onClick={() => stop("Off air. Tap Go Live to tune back in.")} className="flex h-14 w-14 items-center justify-center rounded-full text-zinc-400 transition hover:text-white active:scale-90" aria-label="Stop, go off air">
                 <span className="h-3.5 w-3.5 rounded-[3px] bg-current" />
               </button>
-              <button onClick={() => togglePause()} disabled={phase === "tuning"} aria-label={paused ? "Play" : "Pause"} aria-pressed={paused} data-testid="playpause"
+              <button onClick={() => { if (ytStalled) tapToPlay(); else togglePause(); }} disabled={phase === "tuning"} aria-label={paused || ytStalled ? "Play" : "Pause"} aria-pressed={paused || ytStalled} data-testid="playpause"
                 className="flex h-20 w-20 select-none items-center justify-center rounded-full bg-[#f3efe8] text-[#141210] shadow-[0_12px_44px_-14px_rgba(243,239,232,0.18)] transition active:scale-[0.93] disabled:opacity-40">
-                {paused
+                {paused || ytStalled
                   ? <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z" /></svg>
                   : <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden><rect x="6" y="5" width="4" height="14" rx="1.3" /><rect x="14" y="5" width="4" height="14" rx="1.3" /></svg>}
               </button>

@@ -166,3 +166,20 @@ test("YouTube on iOS (no setVolume): the RJ line plays to the very end and never
   for (const [t, d] of real) expect(t, "voice played to its end").toBeGreaterThanOrEqual(d - 0.3);
   expect(v.overlap, "voice samples while the video was playing").toBe(0);
 });
+
+test("YouTube on iOS (strict: playVideo/load ignored without a tap): Tap to play appears, works, and keeps playing", async ({ context, page }, ti) => {
+  const w = await setup(context, page, { mobile: mob(ti.project.name), prefs: prefsYt({ songLangs: ["any"] }), segmentMs: 300, ttsMs: 200 });
+  const y = await setupYt(page, { pool: POOL(), songSec: 60 });
+  await page.addInitScript(() => { (window as any).__noDuck = true; (window as any).__ytStrict = true; });
+  await page.goto("/live"); await goLive(page, w);
+  const tap = page.getByTestId("tap-to-play");
+  await expect(tap).toBeVisible({ timeout: 30000 });
+  await expect(page.getByRole("button", { name: "Play", exact: true })).toBeVisible(); // UI follows the real player: not "Pause"
+  await tap.click();
+  await expect.poll(() => page.evaluate(() => (window as any).__yt.players[0].state), { timeout: 5000 }).toBe(1);
+  await expect(tap).toBeHidden();
+  await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
+  await page.waitForTimeout(4000);
+  expect(await page.evaluate(() => (window as any).__yt.players[0].state), "still playing").toBe(1);
+  await expect(tap).toBeHidden();
+});
