@@ -39,7 +39,7 @@ export function Lyrics({ text, clock }: { text: string; clock: () => [number, nu
   }, [lineIdx, lines]);
 
   return (
-    <div className="relative h-[200px] w-full overflow-hidden [mask-image:linear-gradient(transparent,black_22%,black_78%,transparent)]">
+    <div className="relative h-[clamp(116px,21svh,200px)] w-full overflow-hidden [mask-image:linear-gradient(transparent,black_22%,black_78%,transparent)]">
       <div ref={boxRef} className="absolute inset-x-0 top-1/2 space-y-3 transition-transform duration-700 ease-[cubic-bezier(.2,.8,.2,1)]" style={{ transform: `translateY(${-offset}px)` }}>
         {lines.out.map((l, i) => (
           <p key={i} className={`text-left text-[22px] font-semibold leading-snug tracking-tight transition-all duration-500 ${i === lineIdx ? "opacity-100" : i < lineIdx ? "opacity-25 blur-[0.3px]" : "opacity-40"}`}>

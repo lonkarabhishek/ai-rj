@@ -81,3 +81,21 @@ body { font-family: var(--font-sans); letter-spacing: -0.005em; }
 @media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } .mascot-tuning .m-waves path { animation: none; opacity: .5; } }
 @media (prefers-reduced-motion: reduce) { .mascot *, .mascot .m-body { animation: none !important; transition: none !important; } }
 @media (prefers-reduced-motion: reduce) { .ambient::before, .ambient::after, .onair-orb { animation: none !important; } }
+
+/* ---- polish: focus, press, hover, type, motion ---- */
+html { -webkit-tap-highlight-color: transparent; text-size-adjust: 100%; }
+h1, h2, h3 { text-wrap: balance; }
+p { text-wrap: pretty; }
+button, a, [role="radio"], [role="button"] { touch-action: manipulation; transition-property: color, background-color, border-color, opacity, transform, box-shadow; transition-duration: .18s; transition-timing-function: cubic-bezier(.2,.8,.2,1); }
+button:not(:disabled):active, [role="radio"]:active { transform: scale(.97); }
+:focus-visible { outline: 2px solid rgb(243 239 232 / .85); outline-offset: 3px; border-radius: 12px; }
+input:focus-visible, textarea:focus-visible, select:focus-visible { outline: none; }
+@media (hover: hover) { button:not(:disabled):hover { filter: brightness(1.06); } }
+main > * { animation: fade-up .45s cubic-bezier(.2,.8,.2,1) both; }
+.sheet-up { will-change: transform; }
+/* small phones: tighten vertical rhythm so nothing is cut off */
+@media (max-height: 700px) { .stage-card { transform: scale(.94); transform-origin: center top; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+  button:not(:disabled):active { transform: none; }
+}

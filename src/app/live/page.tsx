@@ -7,6 +7,7 @@ import { isOnboarded, loadPrefs, MODES, savePrefs, type ListenMode, type Prefs, 
 import { clearSpotifyBackoff, Curator, getMe, limitedEndpoint, quotaExceeded, getToken, getTokenInfo, sp, spotifyBackoffMs, SpotifyError } from "@/lib/spotifyClient";
 import { AllPrefs, MusicSourcePicker, SongLangPicker, TalkToggles, usePrefs } from "@/components/prefs";
 import { YtCurator, YtPlayer, ytConnected, type YtState } from "@/lib/ytClient";
+import { stripTags } from "@/lib/text";
 import { cx, Spinner } from "@/components/ui";
 import { Lyrics } from "@/components/Lyrics";
 import { Mascot } from "@/components/Mascot";
@@ -543,6 +544,7 @@ function LiveInner() {
       setDiag({ script: `${seg.mode ?? "?"} ok` });
       breaksRef.current = [...breaksRef.current, `${plan.kind}:${!seg.script ? "skip" : seg.mode === "llm" ? "claude" : "template"}`].slice(-6);
       setDiag({ breaks: breaksRef.current.join(" · ") });
+      seg.script = stripTags(String(seg.script ?? ""));
       if (!seg.script) { log(`RJ chose silence (${plan.kind})`); return null; }
       recentRef.current.push(seg.script);
       if (plan.withNews && seg.headlines?.length) lastNewsRef.current = Date.now();
@@ -951,7 +953,7 @@ function LiveInner() {
 
         if (!next) {
           setPhase("waiting");
-          setStatus(outRef.current === "none" ? "Connect Spotify for music. Your RJ will keep you company." : "Finding more music…");
+          setStatus(outRef.current === "none" ? "Connect Spotify or YouTube for music. Your RJ will keep you company." : "Finding more music…");
           await sleep(outRef.current === "none" ? 45000 : 8000);
           if (outRef.current !== "none" && !curatorRef.current) curatorRef.current = mkCurator(modeRef.current);
           next = await nextTrack(); setUpNext(next);
@@ -1024,13 +1026,13 @@ function LiveInner() {
         )}
 
         {/* stage */}
-        <section className="flex min-h-0 flex-1 flex-col items-center justify-center py-4 text-center sm:py-8">
+        <section className="flex min-h-0 flex-1 flex-col items-center justify-center py-2 text-center sm:py-8">
           <div className="relative">
             {/* Visible YouTube player (official IFrame API). Always mounted so it keeps playing; shown while a song plays. */}
             <div className={cx("overflow-hidden rounded-2xl bg-black transition-opacity duration-500", ytShow ? "mb-1 h-[200px] w-[min(86vw,356px)] opacity-100 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]" : "pointer-events-none absolute left-0 top-0 h-[200px] w-[356px] opacity-0")} aria-hidden={!ytShow}>
               <div ref={ytHostRef} className="h-full w-full" />
             </div>
-            <div className={cx("aspect-square transition-transform", ytShow && "hidden", phase === "idle" ? "w-[min(38vw,150px,19svh)]" : "w-[min(64vw,280px,30svh)]", art && "overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]", " duration-700", speaking || phase === "rj" ? "scale-[0.72]" : phase === "song" ? "scale-100" : "scale-[0.94]")}>
+            <div className={cx("aspect-square transition-transform", ytShow && "hidden", phase === "idle" ? "w-[min(38vw,150px,19svh)]" : "w-[min(64vw,280px,26svh)]", art && "overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]", " duration-700", speaking || phase === "rj" ? "scale-[0.72]" : phase === "song" ? "scale-100" : "scale-[0.94]")}>
               {art ? <img key={art} src={art} alt="" className="fade-up h-full w-full object-cover" /> : (
                 <div className="relative flex h-full w-full items-center justify-center">
                   <Mascot state={phase === "rj" || speaking ? "talking" : phase === "tuning" || phase === "recovering" ? "tuning" : live ? "live" : "idle"} className="w-[78%]" getLevel={voiceLevel} />
@@ -1046,7 +1048,7 @@ function LiveInner() {
             )}
           </div>
 
-          <div className={cx("min-h-[84px] w-full", live ? "mt-6 sm:mt-10" : "mt-4 sm:mt-6")}>
+          <div className={cx("min-h-[84px] w-full", live ? "mt-7 sm:mt-10" : "mt-4 sm:mt-6")}>
             {(phase === "rj" || speaking) && script ? (
               <Lyrics key={script} text={script} clock={clock} />
             ) : phase === "song" || (phase === "waiting" && now) ? (
@@ -1092,7 +1094,7 @@ function LiveInner() {
 
         <div className="flex items-center gap-3">
           {!live ? (
-            <button onClick={goLive} className="h-14 w-full rounded-full bg-[#f3efe8] text-[17px] sm:h-16 font-semibold text-black shadow-[0_12px_44px_-14px_rgba(243,239,232,0.18)] transition active:scale-[0.97]">Go Live</button>
+            <button aria-label="Go Live" onClick={goLive} className="h-14 w-full rounded-full bg-[#f3efe8] text-[17px] sm:h-16 font-semibold text-black shadow-[0_12px_44px_-14px_rgba(243,239,232,0.18)] transition active:scale-[0.97]">Go Live</button>
           ) : (
             <div className="flex w-full items-center justify-center gap-8">
               <button onClick={() => stop("Off air. Tap Go Live to tune back in.")} className="flex h-12 w-12 items-center justify-center rounded-full text-zinc-400 transition hover:text-white active:scale-90" aria-label="Stop, go off air">
@@ -1111,7 +1113,7 @@ function LiveInner() {
           )}
         </div>
 
-        <button onClick={() => setShowDiag((v) => !v)} className="mt-4 text-[10px] uppercase tracking-[0.14em] text-zinc-700 hover:text-zinc-400">
+        <button aria-expanded={showDiag} onClick={() => setShowDiag((v) => !v)} className="mt-4 text-[10px] uppercase tracking-[0.14em] text-zinc-500 hover:text-zinc-300">
           {diag.error && live ? "● " : ""}Playback details
         </button>
         {showDiag && (

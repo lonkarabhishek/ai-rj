@@ -8,7 +8,7 @@ export function Button({ variant = "primary", className, ...props }: ButtonHTMLA
     <button
       {...props}
       className={cx(
-        "inline-flex items-center justify-center gap-2 rounded-full px-6 h-12 text-[15px] font-medium transition active:scale-[0.97] disabled:opacity-40 disabled:pointer-events-none",
+        "inline-flex items-center justify-center gap-2 rounded-full px-6 h-12 select-none text-[15px] font-medium transition active:scale-[0.97] disabled:opacity-40 disabled:pointer-events-none",
         variant === "primary" && "bg-[#f3efe8] text-[#141210] hover:bg-white",
         variant === "light" && "bg-[#f3efe8] text-[#141210] shadow-[0_10px_40px_-14px_rgba(243,239,232,0.2)] hover:bg-white",
         variant === "ghost" && "text-zinc-300 hover:text-white hover:bg-white/5",
@@ -39,7 +39,7 @@ export function Section({ title, hint, children }: { title: string; hint?: strin
   );
 }
 
-export const inputCls = "w-full h-12 rounded-2xl bg-white/[0.04] border border-white/10 px-4 text-base sm:text-[15px] placeholder:text-zinc-600 outline-none focus:border-white/30 transition";
+export const inputCls = "w-full h-12 rounded-2xl bg-white/[0.04] border border-white/10 px-4 text-base sm:text-[15px] placeholder:text-zinc-500 outline-none focus:border-white/30 transition";
 
 export function Spinner({ className }: { className?: string }) {
   return <span className={cx("inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-white", className)} />;

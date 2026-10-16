@@ -236,7 +236,7 @@ export function AllPrefs({ p, up, compact, returnTo }: { p: Prefs; up: Up; compa
       <Section title="Default mode"><ModePicker value={p.defaultMode} onChange={(m) => up("defaultMode", m)} /></Section>
       <Section title="Music from"><MusicSourcePicker p={p} up={up} returnTo={returnTo ?? "/settings"} /></Section>
       <Section title="Spotify"><SpotifyConnect returnTo={returnTo} /></Section>
-      <Section title="Add your music from anywhere" hint="Screenshots from YouTube Music, Apple Music, JioSaavn, a playlist link, or a typed list. MyRJ finds them on Spotify and leans your radio towards them."><MusicImport p={p} up={up} /></Section>
+      <Section title="Add your music from anywhere" hint="Screenshots from YouTube Music, Apple Music, JioSaavn, a playlist link, or a typed list. MyRJ finds them on Spotify or YouTube and leans your radio towards them."><MusicImport p={p} up={up} /></Section>
       <Section title="YouTube" hint="Pull your liked music and playlists from YouTube / YouTube Music."><YouTubeConnect p={p} up={up} returnTo={returnTo} /></Section>
     </div>
   );

@@ -14,7 +14,7 @@ const COPY: Record<(typeof STEPS)[number], { title: string; sub: string }> = {
   energy: { title: "How much energy?", sub: "Morning chai or full stadium." },
   humor: { title: "What's your humor?", sub: "Your RJ drops a joke between songs." },
   news: { title: "What should you never miss?", sub: "One or two headlines between songs, only on these." },
-  spotify: { title: "Bring your music.", sub: "MyRJ curates from your Spotify: top tracks, likes, playlists and new finds. Premium plays full songs." },
+  spotify: { title: "Bring your music.", sub: "MyRJ curates from your Spotify or YouTube: likes, playlists, top tracks and new finds. Spotify Premium (or YouTube) plays full songs." },
   mode: { title: "How do you listen?", sub: "Pick a mode and song languages. You can change both before every session." },
 };
 

@@ -27,7 +27,7 @@
     "tailwindcss": "^4",
     "typescript": "^5"
   },
-  "description": "MyRJ: a personal AI radio jockey. Self-hosted, with Spotify and YouTube playback, Claude-written RJ lines and Azure voice.",
+  "description": "MyRJ: a personal AI radio jockey that talks between your Spotify or YouTube songs. Self-hosted, with Claude-written RJ lines and Azure voice.",
   "license": "MIT",
   "author": "Abhishek Lonkar",
   "repository": {
