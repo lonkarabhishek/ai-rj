@@ -1,21 +1,24 @@
 import { fetchHeadlines } from "@/lib/news";
+import { isRomantic } from "@/lib/prefs";
 import { llmScript, splitMood, templateScript, type SegmentInput } from "@/lib/script";
 
 export async function POST(req: Request) {
   const body = (await req.json()) as Omit<SegmentInput, "headlines">;
   const { prefs, index } = body;
   // Per-session "RJ talks about" toggles: turned-off types never happen (LLM and template alike).
+  const romantic = isRomantic(body.mode);
+  if (romantic) { prefs.language = "hindi"; prefs.humor = "off"; } // Romantic Hindi: Devanagari Hindi, poetic, no jokes
   const talk = Object.assign({ news: true, jokes: true, facts: true }, prefs.talk);
   if (prefs.justMusic) { talk.news = false; talk.jokes = false; talk.facts = false; }
   prefs.talk = talk;
   if (!talk.jokes) body.withJoke = false;
-  if (!talk.news) body.withNews = false;
+  if (!talk.news || romantic) body.withNews = false;
   const minimal = !talk.news && !talk.jokes && !talk.facts;
   if (minimal && body.kind !== "switch") {
     if (body.mode === "focus" || (prefs.justMusic && body.kind === "stinger")) return Response.json({ script: "", mood: "calm", kind: body.kind ?? "full", mode: "skip", headlines: [] });
     body.kind = "stinger"; body.index = Math.max(1, index); // just a short transition naming the next song
   }
-  const wantNews = body.withNews ?? ((!body.mode || body.mode === "default" || body.mode === "drive") && index % 2 === 0);
+  const wantNews = body.withNews ?? (!romantic && (!body.mode || body.mode === "default" || body.mode === "drive") && index % 2 === 0);
   const headlines = wantNews && body.kind !== "stinger" && prefs.newsTopics?.length ? await fetchHeadlines(prefs.newsTopics, prefs.language, 6) : [];
   // shuffle so repeated segments vary
   headlines.sort(() => Math.random() - 0.5);
@@ -31,6 +34,6 @@ export async function POST(req: Request) {
   const input = { ...body, headlines };
   const llm = await llmScript(input);
   const { mood, text } = splitMood(llm ?? templateScript(input));
-  const defaultMood = { default: "cheerful", drive: "cheerful", gym: "hype", focus: "calm" }[body.mode ?? "default"];
+  const defaultMood = { default: "cheerful", drive: "cheerful", gym: "hype", focus: "calm", romantic_m: "warm", romantic_f: "warm" }[body.mode ?? "default"];
   return Response.json({ script: text, mood: mood ?? defaultMood, kind: body.kind ?? "full", mode: llm !== null ? "llm" : "template", headlines: headlines.slice(0, 2) });
 }

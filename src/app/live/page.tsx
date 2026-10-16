@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { isOnboarded, loadPrefs, MODES, savePrefs, type ListenMode, type Prefs, type TrackInfo } from "@/lib/prefs";
+import { effectiveSongLangs, isOnboarded, isRomantic, loadPrefs, modeInfo, MODES, ROMANTIC_MODES, romanticVoice, savePrefs, type ListenMode, type Prefs, type TrackInfo } from "@/lib/prefs";
 import { clearSpotifyBackoff, Curator, getMe, limitedEndpoint, quotaExceeded, getToken, getTokenInfo, sp, spotifyBackoffMs, SpotifyError } from "@/lib/spotifyClient";
 import { AllPrefs, MusicSourcePicker, SongLangPicker, TalkToggles, usePrefs } from "@/components/prefs";
 import { YtCurator, YtPlayer, ytConnected, type YtState } from "@/lib/ytClient";
@@ -90,8 +90,8 @@ function LiveInner() {
   const yt = () => (ytRef.current ??= new YtPlayer());
   const canDuck = () => outRef.current === "sdk" || outRef.current === "youtube";
   const mkCurator = (m: ListenMode): AnyCurator => outRef.current === "youtube"
-    ? new YtCurator(m, loadPrefs().songLangs, (loadPrefs().externalPlaylists ?? []).map((x) => x.url), loadPrefs().tasteSeeds ?? [])
-    : new Curator(m, loadPrefs().tasteSeeds ?? [], loadPrefs().songLangs);
+    ? new YtCurator(m, effectiveSongLangs(m, loadPrefs().songLangs), (loadPrefs().externalPlaylists ?? []).map((x) => x.url), loadPrefs().tasteSeeds ?? [])
+    : new Curator(m, loadPrefs().tasteSeeds ?? [], effectiveSongLangs(m, loadPrefs().songLangs));
   const recentRef = useRef<string[]>([]);
   const ttsQuotaRef = useRef(false);
   const lastNewsRef = useRef(0);
@@ -113,8 +113,13 @@ function LiveInner() {
     setDiag({ log: [...(diagRef.current.log ?? []).slice(-30), line] });
   };
   const alive = (sid: number) => sessionRef.current === sid;
-  const md = () => MODES.find((x) => x.id === modeRef.current)!;
-  const effPrefs = (): Prefs => { const b = loadPrefs(); return { ...b, energy: md().energy ?? b.energy }; };
+  const md = () => modeInfo(modeRef.current);
+  const effPrefs = (): Prefs => {
+    const b = loadPrefs();
+    // Romantic Hindi sessions: their own voice, Hindi RJ and soft energy for this session only (saved settings untouched).
+    if (isRomantic(modeRef.current)) return { ...b, energy: "chill", language: "hindi", voiceId: romanticVoice(modeRef.current)! };
+    return { ...b, energy: md().energy ?? b.energy };
+  };
 
   // ---------- mount: mode, SDK preload, tab coordination, network + visibility ----------
   useEffect(() => {
@@ -324,7 +329,7 @@ function LiveInner() {
     if (phaseRef.current !== "idle") {
       if (outRef.current !== "none") curatorRef.current = mkCurator(m);
       switchRef.current = m;
-      setNotice(`Switching to ${MODES.find((x) => x.id === m)!.label}…`);
+      setNotice(`Switching to ${modeInfo(m).label}…`);
       setTimeout(() => setNotice(null), 3000);
       if (phaseRef.current === "song" || phaseRef.current === "waiting") skipRef.current(); // fade out now, RJ announces the switch
     }
@@ -340,6 +345,8 @@ function LiveInner() {
       drive: { none: 0.4, stinger: 0.3, maxGap: 3 },
       gym: { none: 0.5, stinger: 0.5, maxGap: 3 },
       focus: { none: 0.8, stinger: 0.2, maxGap: 6 },
+      romantic_m: { none: 0.55, stinger: 0.15, maxGap: 4 }, // softer, rarer: a late-night RJ speaks only when it's worth it
+      romantic_f: { none: 0.55, stinger: 0.15, maxGap: 4 },
     }[m];
     if (loadPrefs().justMusic) { cfg.none = Math.max(cfg.none, 0.7); cfg.maxGap = Math.max(cfg.maxGap, 4); }
     let kind: BreakKind = r < cfg.none ? "none" : r < cfg.none + cfg.stinger ? "stinger" : "full";
@@ -353,7 +360,7 @@ function LiveInner() {
     const newsDue = Date.now() - lastNewsRef.current > 22 * 60 * 1000;
     const tp = loadPrefs();
     const withNews = kind === "full" && newsDue && (m === "default" || m === "drive") && tp.talk.news && !tp.justMusic;
-    const withJoke = kind === "full" && ++sinceJokeRef.current >= 2 && Math.random() < 0.6 && tp.talk.jokes && !tp.justMusic;
+    const withJoke = kind === "full" && !isRomantic(m) && ++sinceJokeRef.current >= 2 && Math.random() < 0.6 && tp.talk.jokes && !tp.justMusic;
     if (withJoke) sinceJokeRef.current = 0;
     return { kind, withNews, withJoke };
   }
@@ -871,7 +878,7 @@ function LiveInner() {
     const wantYt = loadPrefs().music === "youtube";
     if (wantYt) { outRef.current = "youtube"; ytRef.current?.setVolume01(0); ytRef.current?.play(); } // inside the tap: unlocks the player on iOS
     bootStep("spotify", wantYt ? "Starting YouTube…" : "Connecting to Spotify…");
-    let curator: AnyCurator = wantYt ? mkCurator(modeRef.current) : new Curator(modeRef.current, loadPrefs().tasteSeeds ?? [], loadPrefs().songLangs);
+    let curator: AnyCurator = wantYt ? mkCurator(modeRef.current) : new Curator(modeRef.current, loadPrefs().tasteSeeds ?? [], effectiveSongLangs(modeRef.current, loadPrefs().songLangs));
     const nextFrom = async (c: AnyCurator | null): Promise<TrackInfo | null> => {
       if (!c) return null;
       for (let i = 0; i < 3; i++) { const t = await c.next().catch(() => null); if (t) return t; await sleep(Math.max(1500, spotifyBackoffMs() + 500)); }
@@ -1019,8 +1026,8 @@ function LiveInner() {
 
         {live && (
           <div className="mt-3 flex items-center justify-center gap-2 text-[12px] text-zinc-500">
-            <span>{MODES.find((m) => m.id === listenMode)!.label}</span><span className="text-zinc-700">·</span>
-            <span className="max-w-[45%] truncate">{langSummary(prefs.songLangs)}</span>{prefs.justMusic && <><span className="text-zinc-700">·</span><span>Just music</span></>}
+            <span>{modeInfo(listenMode).label}</span><span className="text-zinc-700">·</span>
+            <span className="max-w-[45%] truncate">{isRomantic(listenMode) ? "Hindi only" : langSummary(prefs.songLangs)}</span>{prefs.justMusic && <><span className="text-zinc-700">·</span><span>Just music</span></>}
             <button onClick={() => { setPickerMode(listenMode); setPickerLangs(prefs.songLangs.join()); setPicker(true); }} className="ml-1 text-[#f3efe8] underline-offset-2 hover:underline">Change</button>
           </div>
         )}
@@ -1032,7 +1039,7 @@ function LiveInner() {
             <div className={cx("overflow-hidden rounded-2xl bg-black transition-opacity duration-500", ytShow ? "mb-1 h-[200px] w-[min(86vw,356px)] opacity-100 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]" : "pointer-events-none absolute left-0 top-0 h-[200px] w-[356px] opacity-0")} aria-hidden={!ytShow}>
               <div ref={ytHostRef} className="h-full w-full" />
             </div>
-            <div className={cx("aspect-square transition-transform", ytShow && "hidden", phase === "idle" ? "w-[min(38vw,150px,19svh)]" : "w-[min(64vw,280px,26svh)]", art && "overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]", " duration-700", speaking || phase === "rj" ? "scale-[0.72]" : phase === "song" ? "scale-100" : "scale-[0.94]")}>
+            <div className={cx("aspect-square transition-transform", ytShow && "hidden", phase === "idle" ? "w-[min(34vw,150px,12svh)] [@media(max-height:700px)]:w-[min(34vw,150px,10svh)]" : "w-[min(64vw,280px,26svh)]", art && "overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]", " duration-700", speaking || phase === "rj" ? "scale-[0.72]" : phase === "song" ? "scale-100" : "scale-[0.94]")}>
               {art ? <img key={art} src={art} alt="" className="fade-up h-full w-full object-cover" /> : (
                 <div className="relative flex h-full w-full items-center justify-center">
                   <Mascot state={phase === "rj" || speaking ? "talking" : phase === "tuning" || phase === "recovering" ? "tuning" : live ? "live" : "idle"} className="w-[78%]" getLevel={voiceLevel} />
@@ -1172,6 +1179,8 @@ const DOCK_ICONS: Record<ListenMode, React.ReactNode> = {
   default: <path d="M4 10h16v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-9Zm3-4 10-3M8 15h.01M14 13.5h3M14 16.5h3" />,
   gym: <path d="M6.5 6.5v11M17.5 6.5v11M3.5 9v6M20.5 9v6M6.5 12h11" />,
   drive: <path d="M5 16V11l2-5h10l2 5v5M5 16h14M5 16v2M19 16v2M7.5 13h.01M16.5 13h.01" />,
+  romantic_m: <path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 10c0 5.6-7 10-7 10Z" />,
+  romantic_f: <path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 10c0 5.6-7 10-7 10Z" />,
   focus: <path d="M4 15v-3a8 8 0 0 1 16 0v3M4 15a2 2 0 0 0 2 2h1v-5H6a2 2 0 0 0-2 2Zm16 0a2 2 0 0 1-2 2h-1v-5h1a2 2 0 0 1 2 2Z" />,
 };
 
@@ -1211,23 +1220,35 @@ function langSummary(l: Prefs["songLangs"]) {
 
 /** Pre-live picker: mode (single), song languages (multi), what the RJ talks about. Compact enough for a phone without scrolling. */
 function SessionPicker({ mode, onMode, p, up }: { mode: ListenMode; onMode: (m: ListenMode) => void; p: Prefs; up: <K extends keyof Prefs>(k: K, v: Prefs[K]) => void }) {
-  const label = "mb-2 text-left text-[11px] font-medium uppercase tracking-[0.14em] text-zinc-500";
+  const label = "mb-1.5 text-left text-[11px] font-medium uppercase tracking-[0.14em] text-zinc-500";
   return (
-    <div className="fade-up w-full space-y-4 text-left">
+    <div className="fade-up w-full space-y-3 text-left">
       <div>
         <p className={label}>Mode</p>
         <div className="grid grid-cols-4 gap-1.5" role="radiogroup" aria-label="Mode">
           {MODES.map((m) => (
             <button key={m.id} role="radio" aria-checked={mode === m.id} onClick={() => onMode(m.id)}
-              className={cx("flex h-[60px] flex-col items-center justify-center gap-1 rounded-2xl border text-[12px] font-medium transition active:scale-95", mode === m.id ? "border-[#f3efe8] bg-[#f3efe8] text-[#141210]" : "border-white/10 text-zinc-300 hover:border-white/25")}>
+              className={cx("flex h-[54px] [@media(max-height:700px)]:h-12 flex-col items-center justify-center gap-0.5 rounded-2xl border text-[12px] font-medium transition active:scale-95", mode === m.id ? "border-[#f3efe8] bg-[#f3efe8] text-[#141210]" : "border-white/10 text-zinc-300 hover:border-white/25")}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{DOCK_ICONS[m.id]}</svg>
               {m.label}
             </button>
           ))}
         </div>
       </div>
+      <div>
+        <p className={label}>Romantic Hindi</p>
+        <div className="grid grid-cols-2 gap-1.5" role="radiogroup" aria-label="Romantic Hindi voice">
+          {ROMANTIC_MODES.map((m) => (
+            <button key={m.id} role="radio" aria-checked={mode === m.id} aria-label={`${m.label} · ${m.sub}`} onClick={() => onMode(m.id)}
+              className={cx("flex h-10 [@media(max-height:700px)]:h-9 items-center justify-center gap-2 rounded-2xl border px-2 text-[12px] font-medium transition active:scale-95", mode === m.id ? "border-[#f3efe8] bg-[#f3efe8] text-[#141210]" : "border-white/10 text-zinc-300 hover:border-white/25")}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="shrink-0">{DOCK_ICONS[m.id]}</svg>
+              <span className="leading-tight">{m.sub}<span className="block text-[10px] font-normal opacity-70">हिन्दी · romantic</span></span>
+            </button>
+          ))}
+        </div>
+      </div>
       <div><p className={label}>Music from</p><MusicSourcePicker p={p} up={up} small /></div>
-      <div><p className={label}>Songs in</p><SongLangPicker p={p} up={up} small /></div>
+      <div><p className={label}>Songs in</p>{isRomantic(mode) ? <p className="flex h-8 items-center text-[13px] text-zinc-400" data-testid="songs-hindi-only">Hindi romantic only for this session</p> : <SongLangPicker p={p} up={up} small />}</div>
       <div><p className={label}>RJ talks about</p><TalkToggles p={p} up={up} small /></div>
     </div>
   );

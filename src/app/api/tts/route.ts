@@ -1,5 +1,5 @@
 import { azureEnabled, azureTts, defaultAzureVoice, elevenEnabled, elevenTts, isAzureId, TtsError, type Mood } from "@/lib/tts";
-import type { Energy, Language, ListenMode } from "@/lib/prefs";
+import { romanticVoice, type Energy, type Language, type ListenMode } from "@/lib/prefs";
 
 const EL_DEFAULT = "21m00Tcm4TlvDq8ikWAM"; // ElevenLabs premade "Rachel", present on every account
 
@@ -8,13 +8,14 @@ const EL_DEFAULT = "21m00Tcm4TlvDq8ikWAM"; // ElevenLabs premade "Rachel", prese
  * Response header X-TTS-Provider says who spoke; X-TTS-Fallback lists failures along the way.
  */
 export async function POST(req: Request) {
-  const { text, voiceId, energy = "balanced", mode = "default", language = "english", mood } =
+  const { text, voiceId: reqVoice, energy = "balanced", mode = "default", language = "english", mood } =
     (await req.json()) as { text: string; voiceId?: string; energy?: Energy; mode?: ListenMode; language?: Language; mood?: Mood };
   if (!text) return Response.json({ error: "text required" }, { status: 400 });
+  const voiceId = romanticVoice(mode) ?? reqVoice; // Romantic Hindi sessions always use their own voice (this session only)
   const clean = String(text).slice(0, 1500);
 
   const attempts: { provider: string; run: () => Promise<ArrayBuffer> }[] = [];
-  const azureVoice = voiceId && isAzureId(voiceId) ? voiceId : defaultAzureVoice(language);
+  const azureVoice = voiceId && isAzureId(voiceId) ? voiceId : defaultAzureVoice(romanticVoice(mode) ? "hindi" : language);
   const elVoice = voiceId && !isAzureId(voiceId) ? voiceId : EL_DEFAULT;
   const azure = { provider: "azure", run: () => azureTts(clean, azureVoice, energy, mode, mood) };
   const eleven = { provider: "elevenlabs", run: () => elevenTts(clean, elVoice, energy) };

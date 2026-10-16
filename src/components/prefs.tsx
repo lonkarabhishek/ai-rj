@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 import { useEffect, useRef, useState } from "react";
-import { SONG_LANGS, toggleSongLang, DEFAULT_PREFS, ENERGIES, HUMORS, LANGUAGES, MODES, loadPrefs, savePrefs, type Prefs, type TrackInfo } from "@/lib/prefs";
+import { ROMANTIC_MODES, modeInfo, SONG_LANGS, toggleSongLang, DEFAULT_PREFS, ENERGIES, HUMORS, LANGUAGES, MODES, loadPrefs, savePrefs, type Prefs, type TrackInfo } from "@/lib/prefs";
 import { getMe } from "@/lib/spotifyClient";
 import { Button, Chip, Section, Spinner, cx, inputCls } from "./ui";
 import { AccountPanel } from "./account";
@@ -75,7 +75,7 @@ export function HumorPicker({ p, up }: { p: Prefs; up: Up }) {
 export function ModePicker({ value, onChange }: { value: Prefs["defaultMode"]; onChange: (m: Prefs["defaultMode"]) => void }) {
   return (
     <div className="grid grid-cols-2 gap-2">
-      {MODES.map((m) => (
+      {[...MODES, ...ROMANTIC_MODES.map((r) => modeInfo(r.id))].map((m) => (
         <button key={m.id} onClick={() => onChange(m.id)} className={cx("rounded-2xl border p-4 text-left transition", value === m.id ? "border-white bg-white text-black" : "border-white/10 hover:border-white/25")}>
           <div className="text-xl">{m.emoji}</div><div className="mt-2 text-sm font-medium">{m.label}</div>
           <div className={cx("text-xs", value === m.id ? "text-zinc-600" : "text-zinc-500")}>{m.blurb}</div>
@@ -373,13 +373,13 @@ export function SongLangPicker({ p, up, small }: { p: Prefs; up: Up; small?: boo
       {SONG_LANGS.map((l) => {
         const on = p.songLangs.includes(l.id);
         return <button key={l.id} type="button" aria-pressed={on} onClick={() => up("songLangs", toggleSongLang(p.songLangs, l.id))}
-          className={cx("rounded-full border px-3.5 transition active:scale-95", small ? "h-8 text-[13px]" : "h-9 text-sm", on ? "border-[#f3efe8] bg-[#f3efe8] text-[#141210]" : "border-white/10 text-zinc-300 hover:border-white/25")}>{l.label}</button>;
+          className={cx("rounded-full border px-3.5 transition active:scale-95", small ? "h-8 text-[13px] [@media(max-height:700px)]:h-7 [@media(max-height:700px)]:text-[12px]" : "h-9 text-sm", on ? "border-[#f3efe8] bg-[#f3efe8] text-[#141210]" : "border-white/10 text-zinc-300 hover:border-white/25")}>{l.label}</button>;
       })}
     </div>
   );
 }
 export function TalkToggles({ p, up, small }: { p: Prefs; up: Up; small?: boolean }) {
-  const pill = (on: boolean) => cx("rounded-full border px-3.5 transition active:scale-95 disabled:opacity-35", small ? "h-8 text-[13px]" : "h-9 text-sm", on ? "border-[#f3efe8] bg-[#f3efe8] text-[#141210]" : "border-white/10 text-zinc-300 hover:border-white/25");
+  const pill = (on: boolean) => cx("rounded-full border px-3.5 transition active:scale-95 disabled:opacity-35", small ? "h-8 text-[13px] [@media(max-height:700px)]:h-7 [@media(max-height:700px)]:text-[12px]" : "h-9 text-sm", on ? "border-[#f3efe8] bg-[#f3efe8] text-[#141210]" : "border-white/10 text-zinc-300 hover:border-white/25");
   const t = p.talk;
   return (
     <div className="flex flex-wrap gap-1.5">
@@ -397,7 +397,7 @@ export function TalkToggles({ p, up, small }: { p: Prefs; up: Up; small?: boolea
 export function MusicSourcePicker({ p, up, small, returnTo = "/live" }: { p: Prefs; up: Up; small?: boolean; returnTo?: string }) {
   const [yt, setYt] = useState<boolean | null>(null);
   useEffect(() => { fetch("/api/youtube/songs?status").then((r) => r.json()).then((j) => setYt(!!j.connected)).catch(() => setYt(false)); }, []);
-  const pill = (on: boolean) => cx("rounded-full border px-3.5 transition active:scale-95", small ? "h-8 text-[13px]" : "h-9 text-sm", on ? "border-[#f3efe8] bg-[#f3efe8] text-[#141210]" : "border-white/10 text-zinc-300 hover:border-white/25");
+  const pill = (on: boolean) => cx("rounded-full border px-3.5 transition active:scale-95", small ? "h-8 text-[13px] [@media(max-height:700px)]:h-7 [@media(max-height:700px)]:text-[12px]" : "h-9 text-sm", on ? "border-[#f3efe8] bg-[#f3efe8] text-[#141210]" : "border-white/10 text-zinc-300 hover:border-white/25");
   const src = p.music ?? "spotify";
   return (
     <div>

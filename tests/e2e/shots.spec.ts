@@ -12,6 +12,10 @@ test("size screenshots", async ({ browser }) => {
     const world = await setup(context, page, { mobile, prefs: { songLangs: ["hindi", "english"] }, segmentMs: 2500, ttsMs: 600, songMs: 30000 });
     const out = (n: string) => `docs/shots/${process.env.SHOTS}/${w}x${h}-${n}.png`;
     await page.goto("/live"); await page.waitForTimeout(700); await page.screenshot({ path: out("1-picker") });
+    const over = async (tag: string) => console.log(`FIT ${w}x${h} ${tag}: overflow ${await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight)}px`);
+    await over("picker");
+    const sultry = page.getByRole("radio", { name: "Romantic Hindi · Sultry" });
+    if (await sultry.count()) { await sultry.click(); await page.waitForTimeout(300); await over("picker-romantic"); await page.screenshot({ path: out("1b-picker-romantic") }); await page.getByRole("radio", { name: "My Mix" }).click(); }
     await goLive(page, world); await page.waitForTimeout(500); await page.screenshot({ path: out("2-loading") });
     for (let i = 0; i < 30 && world.plays.length === 0; i++) await page.waitForTimeout(300);
     await page.waitForTimeout(1200); await page.screenshot({ path: out("3-live") });

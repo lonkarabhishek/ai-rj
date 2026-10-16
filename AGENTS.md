@@ -123,6 +123,7 @@ tests/e2e/               Playwright specs + fakes (fake.ts, fakeYt.ts)
 
 Key behaviours to know before editing:
 
+- **Romantic Hindi presets:** `ListenMode` also has `romantic_m` and `romantic_f` (`ROMANTIC_MODES` in `src/lib/prefs.ts`: label, voice id, fallback voice). They are not in `MODES`; the picker shows them in their own row. For that session only they force Hindi songs (`effectiveSongLangs()`), Hindi RJ, soft energy and their own voice (`effPrefs()` in `live/page.tsx`, and `/api/tts` enforces it server-side via `romanticVoice()`). Songs: `ROMANTIC_QUERIES` / `NOT_ROMANTIC_RE` in both `Curator` and `YtCurator`. Script rules: `MODE_RULES` in `script.ts`; `/api/segment` forces Hindi and no jokes/news. SSML prosody and style (only if the voice's StyleList has it) are in `buildSsml()`. Tests: `tests/e2e/romantic.spec.ts`. Verify new voice ids against the live Azure list; never invent keys.
 - **Playback state machine:** `src/app/live/page.tsx` (`phase`: idle, tuning, song, rj, waiting, recovering). Play/pause goes through one path. Don't add parallel timers.
 - **RJ script generation:** `llmScript()` in `src/lib/script.ts`, called by `/api/segment`. All text shown or spoken must pass `stripTags()`.
 - **TTS:** `/api/tts` tries the chosen provider then the other, else the client falls back to browser `speechSynthesis`.

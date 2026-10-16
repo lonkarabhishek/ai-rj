@@ -1,5 +1,5 @@
 "use client";
-import type { ListenMode, SongLang, TrackInfo } from "./prefs";
+import { isRomantic, NOT_ROMANTIC_RE, ROMANTIC_QUERIES, type ListenMode, type SongLang, type TrackInfo } from "./prefs";
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -285,17 +285,18 @@ export class Curator {
     for (const l of this.langs) {
       const qs: string[] = []; per.push(qs);
       const T = LANG_TERMS[l];
-      const base = this.mode === "focus" ? T.focus : T.q;
+      const base = this.mode === "focus" ? T.focus : isRomantic(this.mode) && l === "hindi" ? ROMANTIC_QUERIES : T.q;
       const picks = [...base].sort(() => Math.random() - 0.5).slice(0, this.mode === "focus" ? 2 : 1);
       for (const b of picks) qs.push(`${b} ${this.mode === "focus" ? "" : flavour[Math.floor(Math.random() * flavour.length)]}`.trim());
-      if (this.mode !== "focus" && Math.random() < 0.5) qs.push(`genre:"${T.genre[Math.floor(Math.random() * T.genre.length)]}"`);
+      if (this.mode !== "focus" && !isRomantic(this.mode) && Math.random() < 0.5) qs.push(`genre:"${T.genre[Math.floor(Math.random() * T.genre.length)]}"`);
     }
     // Round-robin across languages so every chosen language gets searched within the budget.
     const qs: string[] = [];
     for (let i = 0; per.some((x) => x[i]); i++) for (const x of per) if (x[i]) qs.push(x[i]);
     const raw = (await Promise.all(qs.slice(0, 5).map((q) => this.search(q, 20, this.mode === "focus" ? 20 : 60)))).flat();
     if (this.mode === "focus") return this.instrumentalOnly(raw);
-    return this.byLang(this.map(raw), true);
+    const mapped = this.map(raw);
+    return this.byLang(isRomantic(this.mode) ? mapped.filter((t) => !NOT_ROMANTIC_RE.test(t.name)) : mapped, true);
   }
   private played = new Set<string>();
   private queue: TrackInfo[] = [];
@@ -427,6 +428,7 @@ export class Curator {
       }
       return out;
     }
+    if (isRomantic(this.mode)) return this.map((await Promise.all([...ROMANTIC_QUERIES].sort(() => Math.random() - 0.5).slice(0, 3).map((q) => this.search(q)))).flat());
     const qs = [...MODE_QUERIES[this.mode as "gym" | "drive"]].sort(() => Math.random() - 0.5).slice(0, 3);
     return this.map((await Promise.all(qs.map((q) => this.search(q)))).flat());
   }
@@ -445,6 +447,13 @@ export class Curator {
     const poolsEmpty = !Object.values(this.pools).some((p) => p?.length);
     if (this.round === 0 || poolsEmpty) await this.loadBase();
     this.round++;
+    if (isRomantic(this.mode)) {
+      // Romantic Hindi: only Hindi romantic searches (never the listener's general favourites, which may be party/other languages).
+      const batch = this.take(await this.langTracks(["", "love", "romantic"]), 10).sort(() => Math.random() - 0.5);
+      this.queue.push(...batch);
+      if (!batch.length && this.played.size) this.played.clear();
+      return;
+    }
     if (this.mode !== "default") {
       const flav = this.mode === "gym" ? ["workout", "party", "gym", ""] : ["road trip", "hits", "party", ""];
       const modeT = this.langs.length ? await this.langTracks(flav) : await this.modeTracks();
@@ -486,7 +495,7 @@ export class Curator {
     }
     if (!this.queue.length) {
       // Never block start: the language filter (or every search) came up empty, so relax it and play favourites.
-      const relaxed = [...this.take(this.pools.top, 6), ...this.take(this.pools.saved, 4), ...this.take(this.pools.seeds, 3), ...this.take(this.pools.playlists, 3)];
+      const relaxed = isRomantic(this.mode) ? await this.byLang([...this.take(this.pools.top, 6), ...this.take(this.pools.saved, 4)], false) : [...this.take(this.pools.top, 6), ...this.take(this.pools.saved, 4), ...this.take(this.pools.seeds, 3), ...this.take(this.pools.playlists, 3)];
       this.queue.push(...relaxed.sort(() => Math.random() - 0.5));
       if (relaxed.length) this.relaxed = true;
     }

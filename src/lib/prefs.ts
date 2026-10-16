@@ -93,10 +93,40 @@ export interface TrackInfo {
   artistIds?: string[];
 }
 
-export type ListenMode = "default" | "gym" | "drive" | "focus";
+export type ListenMode = "default" | "gym" | "drive" | "focus" | "romantic_m" | "romantic_f";
 export const MODES: { id: ListenMode; label: string; emoji: string; blurb: string; talkEvery: number; energy?: Energy }[] = [
   { id: "default", label: "My Mix", emoji: "📻", blurb: "Your favourites + discoveries", talkEvery: 1 },
   { id: "gym", label: "Gym", emoji: "🏋️", blurb: "High-energy, hype RJ", talkEvery: 1, energy: "hype" },
   { id: "drive", label: "Driving", emoji: "🚗", blurb: "Road-trip singalongs", talkEvery: 1, energy: "hype" },
   { id: "focus", label: "Focus", emoji: "🎧", blurb: "Work mode: instrumental, RJ stays quiet", talkEvery: 4, energy: "chill" },
 ];
+
+/**
+ * Romantic Hindi session presets: a session type next to the four modes. They force Hindi songs (romantic only), a Hindi-speaking RJ and a
+ * dedicated Azure voice for that session only (the saved voice setting is untouched).
+ * Voices checked against the live Azure list (hi-IN): MAI-Voice-2.1-Flash Dhruv (deep male, ~90 Hz) and Priya (lowest-pitched female, supports softvoice).
+ */
+export const ROMANTIC_MODES: { id: "romantic_m" | "romantic_f"; label: string; sub: string; voiceId: string; fallbackVoiceId: string; blurb: string }[] = [
+  { id: "romantic_m", label: "Romantic Hindi", sub: "Masculine", voiceId: "azure:hi-IN-Dhruv:MAI-Voice-2.1-Flash", fallbackVoiceId: "azure:hi-IN-KunalNeural", blurb: "Deep, confident male Hindi RJ · romantic Hindi songs" },
+  { id: "romantic_f", label: "Romantic Hindi", sub: "Sultry", voiceId: "azure:hi-IN-Priya:MAI-Voice-2.1-Flash", fallbackVoiceId: "azure:hi-IN-AartiNeural", blurb: "Warm, sultry female Hindi RJ · romantic Hindi songs" },
+];
+export const isRomantic = (m?: ListenMode | string | null): m is "romantic_m" | "romantic_f" => m === "romantic_m" || m === "romantic_f";
+export const romanticVoice = (m?: ListenMode | string | null) => ROMANTIC_MODES.find((x) => x.id === m)?.voiceId;
+/** Display info for any mode, including the romantic presets. */
+export function modeInfo(id: ListenMode) {
+  const m = MODES.find((x) => x.id === id);
+  if (m) return m;
+  const r = ROMANTIC_MODES.find((x) => x.id === id);
+  return { id, label: r ? `${r.label} · ${r.sub}` : id, emoji: "🌙", blurb: r?.blurb ?? "", talkEvery: 1, energy: "chill" as Energy };
+}
+/** Song languages actually used for a session: romantic sessions are Hindi only. */
+export const effectiveSongLangs = (m: ListenMode, langs: SongLang[]): SongLang[] => (isRomantic(m) ? ["hindi"] : langs);
+
+/** Search terms for the Romantic Hindi sessions (Spotify and YouTube). Each says Hindi/Bollywood so results stay Hindi. */
+export const ROMANTIC_QUERIES = [
+  "hindi romantic songs", "bollywood love songs", "arijit singh romantic hindi", "atif aslam romantic hindi songs", "jubin nautiyal love songs hindi",
+  "shreya ghoshal romantic bollywood", "sonu nigam romantic hindi songs", "bollywood romantic ballads", "hindi ghazal love songs", "soft bollywood love songs",
+  "ishq hindi songs", "hindi sad romantic arijit", "bollywood unplugged love songs", "pehla nasha hindi love", "hindi lofi-free romantic acoustic songs",
+];
+/** Titles that break the soft, late-night mood (or are not a clean song): skipped in Romantic Hindi sessions. */
+export const NOT_ROMANTIC_RE = /remix|\bdj\b|party|mashup|bass boosted|slowed|reverb|lofi|lo-fi|item song|\brap\b|\btrap\b|club|dance|workout|edm|\bhype\b/i;

@@ -41,6 +41,7 @@ MyRJ is a personal AI radio station. Pick a mode, tap **Go Live**, and your RJ t
 ## Features
 
 - **Modes:** My Mix, Gym, Driving and Focus (Focus plays only non-lyrical music).
+- **Romantic Hindi presets:** two extra session types under the mode row. **Romantic Hindi · Masculine** (deep, confident male voice) and **Romantic Hindi · Sultry** (warm, intimate female voice). Songs are strictly Hindi romantic (love songs, ballads, soft Bollywood, ghazal-lite) on both Spotify and YouTube; the RJ speaks Devanagari Hindi with shayari-style one-liners and dedications, no news or jokes, and only when it has something worth saying. The preset's voice applies to that session only; your saved voice and language are untouched.
 - **Languages:** the RJ speaks Hindi, English, Hinglish or Marathi. You also choose which languages your *songs* are in, and YouTube picks are strictly filtered to them.
 - **Music sources:** **Spotify** (Web Playback SDK on desktop, Spotify Connect on phones) and **YouTube** (embedded player, ad-free with YouTube Premium). YouTube mode skips albums, compilations, reactions and live streams.
 - **Talks about what you want:** toggle news, jokes and song facts per session, or go "just music".
@@ -129,6 +130,17 @@ MyRJ uses [Azure neural voices](https://learn.microsoft.com/azure/ai-services/sp
 | English (India) | `en-IN-NeerjaNeural` (default), `en-IN-AartiNeural` | `en-IN-PrabhatNeural`, `en-IN-ArjunNeural` |
 | Marathi | `mr-IN-AarohiNeural` (default) | `mr-IN-ManoharNeural` |
 | English, multilingual | `en-US-AvaMultilingualNeural` | `en-US-AndrewMultilingualNeural` |
+
+### Romantic Hindi presets
+
+These two session presets bring their own voices (checked against Azure's live list in `centralindia`; all `hi-IN`). They need an Azure Speech key; with no key the browser's Hindi voice is used.
+
+| Preset | Voice id | Why | SSML |
+| --- | --- | --- | --- |
+| Romantic Hindi · Masculine | `hi-IN-Dhruv:MAI-Voice-2.1-Flash` (fallback `hi-IN-KunalNeural`) | Deep, steady male voice (about 90 Hz median pitch in our samples, vs about 103 Hz for `hi-IN-MadhurNeural`) | pitch -5%, rate -8%, no style |
+| Romantic Hindi · Sultry | `hi-IN-Priya:MAI-Voice-2.1-Flash` (fallback `hi-IN-AartiNeural`) | Lowest-pitched, warmest female `hi-IN` voice we tried, and its StyleList includes `softvoice` for the hushed, close-mic feel | `softvoice` style, pitch -3%, rate +8% (the style already slows delivery) |
+
+The style is only added when the voice's live StyleList contains it. Other `hi-IN` voices worth trying in `ROMANTIC_MODES` (`src/lib/prefs.ts`): `hi-IN-KunalNeural` (deepest classic male), `hi-IN-Kavya:MAI-Voice-2.1-Flash` (female, supports `softvoice` and `whispering`), `hi-IN-AartiNeural`, `hi-IN-AnanyaNeural`. The `MAI-Voice` voices are newer Azure voices: check your region and pricing; if one fails MyRJ retries with the fallback voice.
 
 `en-US-AvaNeural` and `en-US-JennyNeural` also exist in Azure and sound great, but MyRJ's picker only lists India-locale and multilingual voices. To add them, extend the filter in `listAzureVoices()` in `src/lib/tts.ts`.
 

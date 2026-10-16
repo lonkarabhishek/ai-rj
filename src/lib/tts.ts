@@ -1,5 +1,5 @@
 // Server-only TTS providers: Azure Speech (primary), ElevenLabs (optional). Env is read per call.
-import type { Energy, Language, ListenMode } from "./prefs";
+import { isRomantic, ROMANTIC_MODES, type Energy, type Language, type ListenMode } from "./prefs";
 
 export interface VoiceInfo {
   id: string;            // "azure:<ShortName>" or ElevenLabs voice id (no prefix, for backward compat)
@@ -85,7 +85,7 @@ const MOOD: Record<Mood, { rate: number; pitch: number; styles: string[]; degree
   warm: { rate: 7, pitch: 1, styles: ["friendly", "cheerful", "empathetic", "hopeful"], degree: 0.9 },
   calm: { rate: -4, pitch: -1, styles: ["calm", "gentle", "softvoice", "empathetic"], degree: 0.8 },
 };
-export const MODE_MOOD: Record<ListenMode, Mood> = { default: "cheerful", drive: "cheerful", gym: "hype", focus: "calm" };
+export const MODE_MOOD: Record<ListenMode, Mood> = { default: "cheerful", drive: "cheerful", gym: "hype", focus: "calm", romantic_m: "calm", romantic_f: "calm" };
 const ENERGY_SHIFT: Record<Energy, number> = { chill: -5, balanced: 0, hype: 5 };
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 
@@ -96,11 +96,22 @@ export function buildSsml(text: string, shortName: string, energy: Energy = "bal
   let rate = m.rate + (ENERGY_SHIFT[energy] ?? 0);
   if (mode !== "focus" && energy !== "chill") rate = Math.max(rate, 4);
   if (mode === "gym") rate = Math.max(rate, 15);
-  const style = m.styles.find((s) => styles.includes(s));
+  let pitch = m.pitch;
+  let style = m.styles.find((s) => styles.includes(s));
+  let degree = m.degree;
+  if (isRomantic(mode)) {
+    // Romantic Hindi: slow, low and intimate. Style only when this voice's StyleList really has it.
+    // MAI voices already speak slowly (they run ~40% longer than classic neural), so only a gentle slowdown there.
+    const mai = /MAI-Voice/.test(shortName);
+    rate = mai ? (mode === "romantic_f" ? 8 : -8) : -10;
+    pitch = mode === "romantic_m" ? -5 : -3;
+    style = mode === "romantic_f" ? ["softvoice", "gentle", "affectionate", "calm"].find((x) => styles.includes(x)) : undefined;
+    degree = 1;
+  }
   const sign = (n: number) => (n >= 0 ? `+${n}%` : `${n}%`);
-  const inner = `<prosody rate="${sign(rate)}" pitch="${sign(m.pitch)}">${esc(text)}</prosody>`;
+  const inner = `<prosody rate="${sign(rate)}" pitch="${sign(pitch)}">${esc(text)}</prosody>`;
   return `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="${locale}">` +
-    `<voice name="${shortName}">${style ? `<mstts:express-as style="${style}" styledegree="${m.degree}">${inner}</mstts:express-as>` : inner}</voice></speak>`;
+    `<voice name="${shortName}">${style ? `<mstts:express-as style="${style}" styledegree="${degree}">${inner}</mstts:express-as>` : inner}</voice></speak>`;
 }
 
 // live style lists (cached), so styles work for any voice that supports them
@@ -119,6 +130,15 @@ async function stylesFor(short: string): Promise<string[]> {
 export class TtsError extends Error { constructor(public provider: string, public code: string, msg: string) { super(msg); } }
 
 export async function azureTts(text: string, voiceId: string, energy: Energy, mode: ListenMode, mood?: Mood): Promise<ArrayBuffer> {
+  try { return await azureTtsOnce(text, voiceId, energy, mode, mood); }
+  catch (e) {
+    // Romantic presets use newer MAI voices: if one is unavailable in the region, fall back to a classic hi-IN neural voice.
+    const fb = ROMANTIC_MODES.find((x) => x.voiceId === voiceId)?.fallbackVoiceId;
+    if (fb && e instanceof TtsError && e.code !== "not_configured") return azureTtsOnce(text, fb, energy, mode, mood);
+    throw e;
+  }
+}
+async function azureTtsOnce(text: string, voiceId: string, energy: Energy, mode: ListenMode, mood?: Mood): Promise<ArrayBuffer> {
   if (!azureEnabled()) throw new TtsError("azure", "not_configured", "Azure Speech key not set");
   const short = voiceId.replace(/^azure:/, "");
   const styles = await stylesFor(short);

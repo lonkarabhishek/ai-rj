@@ -1,6 +1,6 @@
 "use client";
 /* YouTube source (client): curation from his likes/playlists/imported links + sparing, cached searches; IFrame player wrapper. */
-import type { ListenMode, SongLang, TrackInfo } from "./prefs";
+import { isRomantic, NOT_ROMANTIC_RE, ROMANTIC_QUERIES, type ListenMode, type SongLang, type TrackInfo } from "./prefs";
 export const POOL_KEY = "myrj.yt.pool2";
 
 export interface YtVideo { id: string; title: string; channel: string; seconds: number; image?: string; audioLang?: string; topic?: boolean; lang?: string; src?: "like" | "playlist" | "link" }
@@ -63,7 +63,7 @@ const LQ: Record<Exclude<SongLang, "any">, { q: string[]; focus: string }> = {
   tamil: { q: ["tamil hit songs", "anirudh songs"], focus: "tamil bgm instrumental" },
   telugu: { q: ["telugu hit songs", "dsp telugu songs"], focus: "telugu bgm instrumental" },
 };
-const MODEQ: Record<ListenMode, string> = { default: "", gym: "workout", drive: "road trip", focus: "" };
+const MODEQ: Record<ListenMode, string> = { default: "", gym: "workout", drive: "road trip", focus: "", romantic_m: "", romantic_f: "" };
 const INSTR = /instrumental|lofi|lo-fi|piano|flute|ambient|bgm|study|beats|guitar|sitar|santoor|violin/i;
 /** Titles that are not a single song: compilations, albums, reactions, streams, mixes, podcasts. */
 export const NOT_A_SONG = /\b(full album|full ep|album stream|compilation|jukebox|non[- ]?stop|nonstop|mashup mix|megamix|reaction|reacts?|reacting|live ?stream|livestream|live now|24\/7|podcast|interview|trailer|teaser|making of|behind the scenes|tutorial|how to|review|top \d+|best of|\d+ (hours?|hrs?)|hour(s)? (mix|of)|playlist|full movie|full video album|karaoke|ringtone)\b/i;
@@ -131,20 +131,23 @@ export class YtCurator {
     if (this.bad.has(v.id) || this.played.has(`yt:${v.id}`) || this.queue.some((q) => q.ytId === v.id)) return false;
     if (this.mode === "focus") return INSTR.test(v.title) && !VOCALY.test(v.title) && matchesLangsFocus(v, this.langs);
     if (v.seconds > 600) return false;
+    if (isRomantic(this.mode) && NOT_ROMANTIC_RE.test(`${v.title}`)) return false;
     return matchesLangs(v, this.langs);
   }
 
   private async refill() {
     const pool = (await this.loadPool()).filter((v) => this.ok(v));
     // His own library is the main source: likes + playlists + imported links.
-    let picks: Tagged[] = [...pool].sort(() => Math.random() - 0.5).slice(0, 6);
+    const rom = isRomantic(this.mode); // Romantic Hindi: romantic searches only, not the general library
+    let picks: Tagged[] = rom ? [] : [...pool].sort(() => Math.random() - 0.5).slice(0, 6);
     // Taste-based picks: songs by artists he already has (same language rules), never generic charts while he has artists.
     const want = picks.length >= 4 ? 2 : 10;
-    const artists = this.mode === "focus" ? [] : this.topArtists(await this.loadPool())
+    const artists = this.mode === "focus" || rom ? [] : this.topArtists(await this.loadPool())
       .filter((a) => !this.langs.length || (a.lang ? this.langs.includes(a.lang) : this.langs.length === 1))
       .slice(0, 12).sort(() => Math.random() - 0.5).slice(0, picks.length >= 4 ? 1 : 2);
     const qs: [string, Tagged["via"]][] = artists.map((a) => [`${a.name} songs`, a.lang ?? (this.langs[0] ?? "mode")]);
-    if (!qs.length && picks.length < 4) {
+    if (rom) { for (const q of [...ROMANTIC_QUERIES].sort(() => Math.random() - 0.5).slice(0, 2)) qs.push([q, "hindi"]); }
+    else if (!qs.length && picks.length < 4) {
       const langs: SongLang[] = this.langs.length ? [...this.langs].sort(() => Math.random() - 0.5) : ["any"];
       for (const l of langs) {
         if (this.mode === "focus") qs.push([l === "any" ? "lofi piano instrumental study" : LQ[l].focus, "focus"]);

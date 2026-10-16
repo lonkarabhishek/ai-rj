@@ -1,6 +1,6 @@
 import { stripTags } from "@/lib/text";
 export { stripTags };
-import type { Prefs, TrackInfo, Humor, Language, ListenMode } from "./prefs";
+import { isRomantic, type Prefs, type TrackInfo, type Humor, type Language, type ListenMode } from "./prefs";
 import type { Headline } from "./news";
 
 export interface SegmentInput {
@@ -140,6 +140,8 @@ function templateInner(input: SegmentInput): string {
       gym: { en: "Gym mode on. Let's lift!", hl: "Gym mode on! Chalo, utha do!", hi: "जिम मोड ऑन! चलो, जोश दिखाओ!", mr: "जिम मोड ऑन! चला, जोर लावा!" },
       drive: { en: "Driving mode. Windows down, here we go!", hl: "Driving mode on! Seatbelt lagao, chalte hain!", hi: "ड्राइविंग मोड! सीटबेल्ट लगाइए, चलते हैं!", mr: "ड्रायव्हिंग मोड! सीटबेल्ट लावा, निघूया!" },
       focus: { en: "Focus mode. I'll keep it quiet.", hl: "Focus mode on. Main chup rahunga, aap kaam karo.", hi: "फोकस मोड। मैं चुप रहूँगा, आप काम कीजिए।", mr: "फोकस मोड. मी शांत राहतो, तुम्ही काम करा." },
+      romantic_m: { en: "", hl: "", hi: "रात का सुकून, और दिल के क़रीब कुछ गाने।", mr: "" },
+      romantic_f: { en: "", hl: "", hi: "चलिए, कुछ नर्म सी धुनें, कुछ दिल की बातें।", mr: "" },
       default: { en: "Back to your mix!", hl: "Wapas aapke mix pe!", hi: "वापस आपके मिक्स पर!", mr: "परत तुमच्या मिक्सवर!" },
     };
     return L[mode][k];
@@ -148,6 +150,7 @@ function templateInner(input: SegmentInput): string {
     const k: K = prefs.language === "english" ? "en" : prefs.language === "hinglish" ? "hl" : prefs.language === "hindi" ? "hi" : "mr";
     const tl = trackLine(next);
     if (!tl) return "";
+    if (isRomantic(mode)) return "";
     if (mode === "gym" || mode === "focus") return pick(MODE_LINES[mode][k]).replace("{me}", prefs.listenerName).replace("{track}", tl);
     if (prefs.justMusic || (prefs.talk && !prefs.talk.news && !prefs.talk.jokes && !prefs.talk.facts)) return pick(UPNEXT[k]).replace("{t}", tl) + "."; // listener asked for minimal intros
     return ""; // never a bare "Up next: <song>": stay silent when Claude couldn't write a real line
@@ -155,6 +158,14 @@ function templateInner(input: SegmentInput): string {
   return templateFull(input);
 }
 function templateFull({ prefs, next, index, headlines, mode = "default", hour: input_hour, withJoke }: SegmentInput): string {
+  if (isRomantic(mode)) {
+    const tl = trackLine(next), me = prefs.listenerName;
+    const opener = index === 0 ? `${prefs.rjName} हाज़िर है, ${me}। ` : "";
+    const lines = mode === "romantic_m"
+      ? ["रात ख़ामोश है, और मैं बस तुम्हारे साथ हूँ, {me}।", "कुछ बातें कहनी नहीं पड़तीं, गाने कह देते हैं।", "इश्क़ शोर नहीं करता, {me}, बस धीरे से दिल में उतर जाता है।", "आज की रात, इन सुरों के नाम।"]
+      : ["रात नर्म है, और ये धुन तुम्हारे लिए, {me}।", "कभी कभी ख़ामोशी भी मोहब्बत की ज़ुबान होती है।", "धीमे धीमे, दिल से दिल तक, सुनिए {me}।", "ये गाना उसके नाम, जो आपके दिल के बहुत क़रीब है।"];
+    return opener + pick(lines).replace("{me}", me) + (tl ? ` ${pick(UPNEXT.hi).replace("{t}", tl)}।` : "");
+  }
   if (mode !== "default") {
     const k: K = prefs.language === "english" ? "en" : prefs.language === "hinglish" ? "hl" : prefs.language === "hindi" ? "hi" : "mr";
     const me = prefs.listenerName;
@@ -234,6 +245,8 @@ const HUMOR_RULES: Record<string, string> = {
   dark: "Humor: dark, deadpan and self-deprecating (deadlines, bank balance, existential dread), never cruel about real tragedies or groups of people.",
 };
 const MODE_RULES: Record<string, string> = {
+  romantic_m: "Mode: Romantic Hindi, masculine voice. A deep, calm, confident late-night RJ: slow, warm, poetic Devanagari Hindi. Shayari-style one-liners, soft dedications, an intimate hush. Romantic and sensual in tone, never explicit or crude. No news, no jokes, no hype. 1 to 3 short sentences, then a gentle segue naming the next song.",
+  romantic_f: "Mode: Romantic Hindi, sultry feminine voice. A warm, intimate, sultry late-night RJ: soft, unhurried, poetic Devanagari Hindi. Shayari-style one-liners, tender dedications, a whisper-close feel. Romantic and sensual in tone, never explicit or crude. No news, no jokes, no hype. 1 to 3 short sentences, then a gentle segue naming the next song.",
   default: "Mode: My Mix. A normal break: 2 to 4 sentences. Real banter, a joke when asked, news when given, then a smooth segue into the next song.",
   drive: "Mode: Driving. Road-trip buddy energy: playful, sing-along vibes, mention the road or the drive. 2 to 4 sentences, joke when asked, news when given, then the segue.",
   gym: "Mode: Gym. Hype coach energy. 2 to 3 short punchy sentences, motivational, no news, no long jokes. End by firing up the next song.",
@@ -258,7 +271,7 @@ Written for speech, read aloud by a TTS voice:
 - Output ONLY the words to speak. No emojis, markdown, hashtags, quotes around the whole thing, stage directions or sound effects.
 - Spell numbers and symbols naturally ("twenty twenty-six", "ten percent").
 - Short, rhythmic sentences that sound good out loud.
-- Start your reply with a delivery tag for the voice, exactly one of [hype] [cheerful] [warm] [calm], matching the line's energy (e.g. [hype] for gym, [cheerful] for a fun break, [warm] for a heartfelt song, [calm] for focus). Then the words.
+- ${mode.startsWith("romantic") ? "Always Devanagari Hindi (song and artist names may stay in English). Use [warm] or [calm] as the delivery tag. " : ""}Start your reply with a delivery tag for the voice, exactly one of [hype] [cheerful] [warm] [calm], matching the line's energy (e.g. [hype] for gym, [cheerful] for a fun break, [warm] for a heartfelt song, [calm] for focus). Then the words.
 
 Like real FM, you only talk when you have something worth saying: an interesting fact about the song or artist, a fresh headline, a fitting joke, or a time-of-day moment. Filler like "that was a great song" is not worth saying. If you have nothing good, reply with exactly SKIP and the music just keeps flowing.`;
 }
@@ -277,14 +290,15 @@ export async function llmScript(input: SegmentInput): Promise<string | null> {
   const timeOfDay = h < 5 ? "late night" : h < 12 ? "morning" : h < 17 ? "afternoon" : h < 21 ? "evening" : "night";
   const stinger = input.kind === "stinger" && index > 0;
   const isSwitch = input.kind === "switch";
-  const wantNews = !stinger && !isSwitch && mode !== "gym" && mode !== "focus" && headlines.length > 0;
-  const wantJoke = !stinger && !isSwitch && mode !== "gym" && mode !== "focus" && prefs.humor !== "off" && input.withJoke !== false && prefs.talk?.jokes !== false;
+  const rom = isRomantic(mode);
+  const wantNews = !stinger && !isSwitch && !rom && mode !== "gym" && mode !== "focus" && headlines.length > 0;
+  const wantJoke = !stinger && !isSwitch && !rom && mode !== "gym" && mode !== "focus" && prefs.humor !== "off" && input.withJoke !== false && prefs.talk?.jokes !== false;
   const noFacts = prefs.talk?.facts === false;
   const user = [
     `Break number ${index + 1}. Listener's local time: ${timeOfDay}.`,
     index === 0 ? "This is the show opener: welcome them in." : `Song that just finished: ${trackLine(prev) || "unknown"}.`,
     `Next song to introduce: ${trackLine(next) || "(none yet, just keep them company)"}.`,
-    isSwitch ? `The listener just switched to ${mode === "default" ? "My Mix" : mode} mode. Say ONE short, fitting transition line (under 12 words) that acknowledges the switch with the new energy, then nothing else. Do not SKIP.` :
+    isSwitch ? `The listener just switched to ${mode === "default" ? "My Mix" : rom ? "Romantic Hindi" : mode} mode. Say ONE short, fitting transition line (under 12 words) that acknowledges the switch with the new energy, then nothing else. Do not SKIP.` :
     stinger ? "This is a STINGER: at most ONE short line (under 15 words) said over the song's intro, e.g. a quick fact or vibe about the next song. If you have nothing genuinely interesting, reply SKIP." :
       "This is a full break: 2 to 4 sentences, under 70 words total. Only say things worth saying; if you truly have nothing good, reply SKIP.",
     prefs.language === "hindi" || prefs.language === "marathi" ? `Write in ${prefs.language === "hindi" ? "Hindi" : "Marathi"} using Devanagari script (song and artist names may stay in English).` : prefs.language === "hinglish" ? "Write in Hinglish, Roman script." : "Write in English.",
