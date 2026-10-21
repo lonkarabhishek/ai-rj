@@ -21,7 +21,7 @@ export interface Faults {
   noDevices?: boolean;
   mood500?: boolean;           // /api/songmood fails (classification down)
 }
-export interface Opts { mobile: boolean; prefs?: Record<string, unknown> | null; faults?: Faults; songMs?: number; segmentMs?: number; ttsMs?: number }
+export interface Opts { mobile: boolean; prefs?: Record<string, unknown> | null; faults?: Faults; songMs?: number; segmentMs?: number; ttsMs?: number; trivia?: boolean } // trivia: the first full break after the opener asks a question
 
 export const BASE_PREFS = { onboarded: true, rjName: "Riya", listenerName: "Abhishek", voiceId: "en-IN-NeerjaNeural", newsTopics: ["AI"] };
 
@@ -37,7 +37,8 @@ export class World {
   moodCalls: string[][] = [];
   spotifyCalls: string[] = [];
   consoleErrors: string[] = [];
-  player = { uri: "", startedAt: 0, pausedAt: 0, isPlaying: false, device: "" };
+  player = { uri: "", startedAt: 0, pausedAt: 0, isPlaying: false, device: "", queue: [] as string[] };
+  playBodies: string[][] = []; // uris of every explicit play request
   externalPause = false;
   clickAt = 0;
   private n = 0;
@@ -56,7 +57,12 @@ export class World {
     return Math.min((p.isPlaying ? Date.now() : p.pausedAt) - p.startedAt, this.tracks.get(p.uri)?.durationMs ?? 0);
   }
   state() {
-    const p = this.player, t = this.tracks.get(p.uri);
+    const p = this.player;
+    // Like the real app: a song queued behind the current one starts by itself when the current one ends.
+    for (let cur = this.tracks.get(p.uri); cur && p.isPlaying && p.queue.length && Date.now() - p.startedAt >= cur.durationMs; cur = this.tracks.get(p.uri)) {
+      const nx = p.queue.shift()!; p.startedAt += cur.durationMs; p.uri = nx;
+    }
+    const t = this.tracks.get(p.uri);
     if (!t) return null;
     const pos = this.position(); const ended = pos >= t.durationMs;
     return { is_playing: p.isPlaying && !ended, progress_ms: ended ? 0 : pos, item: this.json(t), device: { id: p.device } };
@@ -75,7 +81,7 @@ function sdkSource(mobile: boolean) {
       disconnect() {} activateElement() { return Promise.resolve(); }
       async pause() { await api('/me/player/pause?device_id=web1&sdk=1', 'PUT'); }
       async resume() { await api('/me/player/play?device_id=web1&sdk=1', 'PUT'); }
-      async setVolume(v) { this.vol = v; } async getVolume() { return this.vol; }
+      async setVolume(v) { this.vol = v; (window.__vols = window.__vols || []).push([Date.now(), v]); } async getVolume() { return this.vol; }
       async getCurrentState() { const s = await api('/me/player?sdk=1'); if (!s || !s.item) return null;
         return { paused: !s.is_playing, position: s.progress_ms, duration: s.item.duration_ms, track_window: { current_track: { uri: s.item.uri } } }; }
     } };
@@ -142,8 +148,8 @@ export async function setup(ctx: BrowserContext, page: Page, o: Opts) {
       if (body?.uris) {
         if (p404) { p404 = false; return r.fulfill({ status: 404, json: { error: { status: 404, message: "Device not found", reason: "NO_ACTIVE_DEVICE" } } }); }
         if (p502) { p502 = false; return r.fulfill({ status: 502, json: { error: { status: 502 } } }); }
-        w.plays.push({ t: Date.now(), uri: body.uris[0] });
-        Object.assign(w.player, { uri: body.uris[0], startedAt: Date.now(), isPlaying: true, device: u.searchParams.get("device_id") ?? "" });
+        w.plays.push({ t: Date.now(), uri: body.uris[0] }); w.playBodies.push(body.uris);
+        Object.assign(w.player, { uri: body.uris[0], startedAt: Date.now(), isPlaying: true, device: u.searchParams.get("device_id") ?? "", queue: body.uris.slice(1) });
       } else if (w.player.uri && !w.player.isPlaying) { w.player.startedAt += Date.now() - w.player.pausedAt; w.player.isPlaying = true; }
       return r.fulfill({ status: 204 });
     }
@@ -178,7 +184,10 @@ export async function setup(ctx: BrowserContext, page: Page, o: Opts) {
     const talk = Object.assign({ news: true, jokes: true, facts: true }, b.prefs?.talk);
     const minimal = b.prefs?.justMusic || (!talk.news && !talk.jokes && !talk.facts);
     if (minimal && b.kind !== "switch" && b.mode === "focus") return r.fulfill({ json: { script: "", mood: "calm", kind: b.kind, mode: "skip", headlines: [] } }).catch(() => {});
-    r.fulfill({ json: { script: minimal && b.kind !== "switch" ? `Next up, ${b.next?.name ?? "more music"}, stay with me.` : segScript(b), mood: "warm", kind: b.kind ?? "full", mode: "llm", headlines: [] } }).catch(() => {});
+    const ask = o.trivia && b.kind === "full" && b.index > 0 && !w.segments.some((x) => x !== b && x.kind === "full" && x.index > 0 && x.segment !== "trivia_a" && x.asked);
+    if (ask) b.asked = true;
+    const script = minimal && b.kind !== "switch" ? `Next up, ${b.next?.name ?? "more music"}, stay with me.` : b.segment === "trivia_a" && b.trivia ? `Toh jawab hai ${b.trivia.a}! Coming up, ${b.next?.name ?? "more"}.` : segScript(b);
+    r.fulfill({ json: { script, mood: "warm", kind: b.kind ?? "full", mode: "llm", segment: ask ? "trivia_q" : b.segment ?? "vibe", trivia: ask ? { q: "Which year did this one come out?", a: "twenty nineteen" } : null, headlines: [] } }).catch(() => {});
   });
   await page.route("**/api/tts", async (r) => {
     const b = r.request().postDataJSON(); w.tts.push(b.text);

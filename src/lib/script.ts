@@ -16,7 +16,24 @@ export interface SegmentInput {
   withJoke?: boolean;
  // listener's local hour, for time-of-day banter // recent scripts, used to avoid repeating lines
   headlines: Headline[];
+  segment?: SegmentType; // the show bit for a full break (client rotates them)
+  history?: { name: string; artists: string }[]; // songs played this session, oldest first
+  trivia?: { q: string; a: string } | null; // a trivia question asked earlier: reveal the answer in this break
+  minutes?: number; // how long this session has been on air
 }
+
+/** Recurring show bits for full breaks. "vibe" is the plain break. */
+export type SegmentType = "vibe" | "story" | "trivia_q" | "trivia_a" | "hot_take" | "callback" | "dedication";
+export const SEGMENTS: SegmentType[] = ["vibe", "story", "trivia_q", "trivia_a", "hot_take", "callback", "dedication"];
+const SEGMENT_RULES: Record<SegmentType, string> = {
+  vibe: "Segment: a classic break. React to the song that just played or the moment (time of day, mood, the mode), then segue.",
+  story: "Segment: THE STORY. Tell one real, specific story behind the next song or its artist (how it was made, the film or album it came from, the composer, the era, a famous moment). Only facts you are confident are true; if you are not sure of any specific fact, talk about why the song hits instead. Make it sound like a secret you're letting them in on.",
+  trivia_q: "Segment: TRIVIA. Ask the listener one fun, fair trivia question about the next song, its artist, its film or its era, and tell them the answer comes after the song. Only ask a question whose answer you are certain of. After your spoken words, on a NEW final line, write ANSWER: followed by the answer in a few words (this line is hidden, never spoken).",
+  trivia_a: "Segment: TRIVIA ANSWER. You asked a trivia question before the last song. Reveal the answer with a little drama first (\"toh jawab hai...\"), react playfully, then segue into the next song.",
+  hot_take: "Segment: HOT TAKE. Give one playful, opinionated take on the song that just played or the next one (best line, best beat drop, rate it out of ten, a bold comparison). Confident, funny, never mean about real people.",
+  callback: "Segment: CALLBACK. Connect this moment to songs played earlier in this session (listed above): spot a pattern, a mood arc, an artist coming back, or joke about the journey so far. Make the listener feel the show has been listening to them.",
+  dedication: "Segment: DEDICATION. Dedicate the next song, FM style, to a relatable group or moment (everyone stuck in traffic, the one friend who always sends reels at 2 am, whoever is missing someone tonight). Warm and specific, never about a real named private person.",
+};
 
 let RECENT: string[] = [];
 const pick = (a: string[]) => {
@@ -233,7 +250,7 @@ function templateFull({ prefs, next, index, headlines, mode = "default", hour: i
 
 const LANG_RULES: Record<string, string> = {
   english: "Speak natural Indian English, the way a Mumbai or Bangalore FM host talks.",
-  hinglish: "Speak natural Hinglish in Roman script: Hindi and English mixed mid-sentence the way young urban Indians actually talk (e.g. 'Yaar, ye gaana toh full nostalgia trip hai'). No Devanagari.",
+  hinglish: "Speak natural Hinglish in Roman script: Hindi and English mixed mid-sentence the way young urban Indians actually talk, the way a Mumbai FM host does at prime time (e.g. 'Yaar, ye gaana toh full nostalgia trip hai', 'Sach bataun? Is chorus pe main har baar haar jaati hoon', 'Chalo, volume thoda aur, kyunki ab aa raha hai...'). Spell Hindi words the common texting way (hai, nahi, kya, yaar). No Devanagari.",
   hindi: "Speak conversational Hindi in Devanagari script. Common English words (song, playlist, AI, office) are fine as Indians say them.",
   marathi: "Speak conversational Marathi in Devanagari script, warm Pune/Mumbai FM style. Common English words are fine as Marathi speakers use them.",
 };
@@ -247,14 +264,20 @@ const HUMOR_RULES: Record<string, string> = {
 const MODE_RULES: Record<string, string> = {
   romantic_m: "Mode: Romantic Hindi, masculine voice. A deep, calm, confident late-night RJ: slow, warm, poetic Devanagari Hindi. Shayari-style one-liners, soft dedications, an intimate hush. Romantic and sensual in tone, never explicit or crude. No news, no jokes, no hype. 1 to 3 short sentences, then a gentle segue naming the next song.",
   romantic_f: "Mode: Romantic Hindi, sultry feminine voice. A warm, intimate, sultry late-night RJ: soft, unhurried, poetic Devanagari Hindi. Shayari-style one-liners, tender dedications, a whisper-close feel. Romantic and sensual in tone, never explicit or crude. No news, no jokes, no hype. 1 to 3 short sentences, then a gentle segue naming the next song.",
-  default: "Mode: My Mix. A normal break: 2 to 4 sentences. Real banter, a joke when asked, news when given, then a smooth segue into the next song.",
+  default: "Mode: My Mix. A normal break: 2 to 5 sentences. Real banter, a joke when asked, news when given, then a smooth segue into the next song.",
   drive: "Mode: Driving. Road-trip buddy energy: playful, sing-along vibes, mention the road or the drive. 2 to 4 sentences, joke when asked, news when given, then the segue.",
   gym: "Mode: Gym. Hype coach energy. 2 to 3 short punchy sentences, motivational, no news, no long jokes. End by firing up the next song.",
   focus: "Mode: Work/Focus. Calm and minimal. ONE short sentence (max 15 words) that gently names the next track. No jokes, no news.",
 };
 
 export function systemPrompt(p: SegmentInput["prefs"], mode: ListenMode) {
-  return `You are ${p.rjName}, a charismatic Indian FM radio jockey hosting a private, one-listener radio show for ${p.listenerName}. Think the warmth and wit of the best Indian FM RJs: quick, playful, effortlessly cool, genuinely fond of your listener.
+  return `You are ${p.rjName}, a charismatic Indian FM radio jockey hosting a private, one-listener radio show for ${p.listenerName} on MyRJ. Think the warmth and wit of the best Indian FM RJs: quick, playful, effortlessly cool, genuinely fond of your listener.
+
+Your personality (stay consistent across the whole show):
+- You have opinions about music and share them: favourite lines, the beat that gets you, the singer who never misses. Light teasing of the listener is fine; meanness is not.
+- The show has memory. When the breaks below show what already happened (songs played, a trivia question), build on it like a running conversation, not a reset.
+- You have a signature sign-on for the show: "${p.rjName}, on MyRJ, sirf ${p.listenerName} ke liye" (or the same idea in the show's language). Use it in the opener and only rarely after that.
+- Sound like a person on a live mic: little reactions ("uff", "arre", "wait wait"), a quick laugh, then straight back to it. Never sound like an announcer reading a script.
 
 How you talk:
 - ${LANG_RULES[p.language] ?? LANG_RULES.english}
@@ -273,8 +296,44 @@ Written for speech, read aloud by a TTS voice:
 - Short, rhythmic sentences that sound good out loud.
 - ${mode.startsWith("romantic") ? "Always Devanagari Hindi (song and artist names may stay in English). Use [warm] or [calm] as the delivery tag. " : ""}Start your reply with a delivery tag for the voice, exactly one of [hype] [cheerful] [warm] [calm], matching the line's energy (e.g. [hype] for gym, [cheerful] for a fun break, [warm] for a heartfelt song, [calm] for focus). Then the words.
 
-Like real FM, you only talk when you have something worth saying: an interesting fact about the song or artist, a fresh headline, a fitting joke, or a time-of-day moment. Filler like "that was a great song" is not worth saying. If you have nothing good, reply with exactly SKIP and the music just keeps flowing.`;
+Never use filler like "that was a great song" or "what a song": every line should be a story, an opinion, a joke, a feeling or a real moment.`;
 }
+
+/** Pulls the hidden "ANSWER: ..." line a trivia question carries, so it is never spoken. */
+export function splitAnswer(t: string): { text: string; answer?: string } {
+  const m = t.match(/\s*\bANSWER\s*:\s*(.+?)\s*$/i);
+  if (!m || m.index === undefined) return { text: t };
+  return { text: t.slice(0, m.index).trim(), answer: m[1].replace(/[.\s]+$/, "").slice(0, 120) };
+}
+
+/** The segment this break actually runs: anything that doesn't fit the break, mode or toggles becomes a plain break. */
+export function segmentFor(input: SegmentInput): SegmentType {
+  const s = input.segment && SEGMENTS.includes(input.segment) ? input.segment : "vibe";
+  const mode = input.mode ?? "default";
+  if ((input.kind !== "full" && input.kind !== undefined) || input.index === 0 || isRomantic(mode) || mode === "gym" || mode === "focus") return "vibe";
+  const facts = input.prefs.talk?.facts !== false && !input.prefs.justMusic;
+  if ((s === "story" || s === "trivia_q") && !facts) return "vibe";
+  if (s === "trivia_a" && !input.trivia) return "vibe";
+  if (s === "callback" && (input.history?.length ?? 0) < 3) return "vibe";
+  return s;
+}
+
+/** Model per break: full breaks get the stronger writer, short lines the fast one. */
+export function modelFor(input: Pick<SegmentInput, "kind" | "index">) {
+  const short = (input.kind === "stinger" && input.index > 0) || input.kind === "switch";
+  return short ? (process.env.ANTHROPIC_MODEL || "claude-haiku-5-5") : (process.env.ANTHROPIC_MODEL_FULL || "claude-sonnet-5-5");
+}
+/** Request body per model family: Sonnet 5.5 rejects disabled thinking and custom sampling; Haiku keeps the fast settings. */
+function anthropicBody(model: string, system: string, user: string) {
+  const base = { model, max_tokens: 1024, system, messages: [{ role: "user", content: user }] };
+  if (model.includes("sonnet-5-5")) return { ...base, thinking: { type: "between_tools" }, output_config: { effort: "low" }, fallbacks: "default" };
+  if (/opus|fable|mythos/.test(model)) return { ...base, output_config: { effort: "low" } }; // thinking can't be turned off there: keep it shallow
+  return { ...base, temperature: 1, thinking: { type: "disabled" } }; // speed matters more than reasoning for a short line
+}
+const anthropicHeaders = (key: string, model: string): Record<string, string> => ({
+  "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json",
+  ...(model.includes("sonnet-5-5") ? { "anthropic-beta": "server-side-fallback-2026-07-01" } : {}),
+});
 
 /** Writes the RJ script with an LLM. Anthropic Claude first, then any OpenAI-compatible API. Null on failure/timeout. */
 export function splitMood(t: string): { mood?: "hype" | "cheerful" | "warm" | "calm"; text: string } {
@@ -294,45 +353,55 @@ export async function llmScript(input: SegmentInput): Promise<string | null> {
   const wantNews = !stinger && !isSwitch && !rom && mode !== "gym" && mode !== "focus" && headlines.length > 0;
   const wantJoke = !stinger && !isSwitch && !rom && mode !== "gym" && mode !== "focus" && prefs.humor !== "off" && input.withJoke !== false && prefs.talk?.jokes !== false;
   const noFacts = prefs.talk?.facts === false;
+  const seg = segmentFor(input);
+  const played = (input.history ?? []).slice(-8).map((t) => `"${t.name}" by ${t.artists}`);
   const user = [
-    `Break number ${index + 1}. Listener's local time: ${timeOfDay}.`,
-    index === 0 ? "This is the show opener: welcome them in." : `Song that just finished: ${trackLine(prev) || "unknown"}.`,
+    `Break number ${index + 1}. Listener's local time: ${timeOfDay}.${input.minutes ? ` On air together for ${input.minutes} minutes.` : ""}`,
+    index === 0 ? "This is the show opener: welcome them in with your sign-on and real energy." : `Song that just finished: ${trackLine(prev) || "unknown"}.`,
     `Next song to introduce: ${trackLine(next) || "(none yet, just keep them company)"}.`,
+    played.length > 1 && !stinger && !isSwitch ? `Played so far this session (oldest first): ${played.join("; ")}.` : "",
     isSwitch ? `The listener just switched to ${mode === "default" ? "My Mix" : rom ? "Romantic Hindi" : mode} mode. Say ONE short, fitting transition line (under 12 words) that acknowledges the switch with the new energy, then nothing else. Do not SKIP.` :
-    stinger ? "This is a STINGER: at most ONE short line (under 15 words) said over the song's intro, e.g. a quick fact or vibe about the next song. If you have nothing genuinely interesting, reply SKIP." :
-      "This is a full break: 2 to 4 sentences, under 70 words total. Only say things worth saying; if you truly have nothing good, reply SKIP.",
+    stinger ? "This is a STINGER: ONE short line (under 15 words) said over the song's intro: a quick fact, a reaction or the vibe of the next song. If you truly have nothing, reply SKIP." :
+      `This is a full break, spoken over the end of one song and the start of the next: 2 to 5 sentences, under ${seg === "story" || seg === "trivia_a" ? 90 : 70} words total. Do not SKIP.`,
+    !stinger && !isSwitch && !rom && seg !== "vibe" ? SEGMENT_RULES[seg] : "",
+    seg === "trivia_a" && input.trivia ? `The question you asked: "${input.trivia.q}" The correct answer: ${input.trivia.a}.` : "",
     prefs.language === "hindi" || prefs.language === "marathi" ? `Write in ${prefs.language === "hindi" ? "Hindi" : "Marathi"} using Devanagari script (song and artist names may stay in English).` : prefs.language === "hinglish" ? "Write in Hinglish, Roman script." : "Write in English.",
     wantNews ? `Headlines to weave in (pick one or two): ${headlines.slice(0, 3).map((x) => x.title).join(" | ")}` : "No news in this break.",
     wantJoke ? "Include one joke with a real punchline in their humor style." : "No jokes in this break.",
     noFacts ? "Do NOT share song or artist facts or trivia; just name the song and the mood." : "",
     input.recent?.length ? `Your recent breaks (do NOT repeat their openers, jokes or phrasing):\n- ${input.recent.slice(-4).join("\n- ")}` : "",
   ].filter(Boolean).join("\n");
-  const clean = (t?: string | null) => t?.replace(/[*_#`]/g, "").replace(/^(\s*\[[a-z]+\]\s*)?["']/i, "$1").replace(/["']$/, "").replace(/\s+/g, " ").trim() || null;
-  const signal = AbortSignal.timeout(Number(process.env.LLM_TIMEOUT_MS ?? 8000));
+  // Newlines are kept until the hidden ANSWER line is split off (route.ts), then collapsed there.
+  const clean = (t?: string | null) => t?.replace(/[*_#`]/g, "").replace(/^(\s*\[[a-z]+\]\s*)?["']/i, "$1").replace(/["']$/, "").replace(/[ \t]+/g, " ").trim() || null;
+  const isSkip = (t: string) => /^(\[\w+\]\s*)?skip\.?$/i.test(t);
 
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   if (anthropicKey) {
-    try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", signal,
-        headers: { "x-api-key": anthropicKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-        body: JSON.stringify({
-          model: process.env.ANTHROPIC_MODEL || "claude-haiku-5-5",
-          max_tokens: 1024, temperature: 1,
-          thinking: { type: "disabled" }, // speed matters more than reasoning for a 3-sentence break
-          system: systemPrompt(prefs, mode),
-          messages: [{ role: "user", content: user }],
-        }),
-      });
-      if (res.ok) {
-        const j = await res.json();
-        const t = clean((j.content ?? []).filter((c: { type: string }) => c.type === "text").map((c: { text: string }) => c.text).join(" "));
-        if (!t) console.error("anthropic: no text", j.stop_reason);
-        if (t) return /^(\[\w+\]\s*)?skip\.?$/i.test(t) ? "" : t;
-      } else console.error("anthropic", res.status, (await res.text()).slice(0, 200));
-    } catch (e) { console.error("anthropic failed", e); }
+    // Full breaks: the stronger model first, then the fast one if it fails or is slow (breaks are prefetched during the song).
+    const primary = modelFor(input), fast = process.env.ANTHROPIC_MODEL || "claude-haiku-5-5";
+    const chain = primary === fast ? [primary] : [primary, fast];
+    const budget = Number(process.env.LLM_TIMEOUT_MS ?? (chain.length > 1 ? 16000 : 8000)), t0 = Date.now();
+    for (const [i, model] of chain.entries()) {
+      const left = budget - (Date.now() - t0);
+      if (left < 2500) break;
+      try {
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST", signal: AbortSignal.timeout(i === 0 && chain.length > 1 ? Math.min(left - 3000, 12000) : left),
+          headers: anthropicHeaders(anthropicKey, model),
+          body: JSON.stringify(anthropicBody(model, systemPrompt(prefs, mode), user)),
+        });
+        if (res.ok) {
+          const j = await res.json();
+          if (j.stop_reason === "refusal") { console.error("anthropic refusal", model); continue; }
+          const t = clean((j.content ?? []).filter((c: { type: string }) => c.type === "text").map((c: { text: string }) => c.text).join(" "));
+          if (!t) console.error("anthropic: no text", model, j.stop_reason);
+          if (t) return isSkip(t) ? "" : t;
+        } else console.error("anthropic", model, res.status, (await res.text()).slice(0, 200));
+      } catch (e) { console.error("anthropic failed", model, e); }
+    }
     return null;
   }
+  const signal = AbortSignal.timeout(Number(process.env.LLM_TIMEOUT_MS ?? 8000));
 
   const key = process.env.OPENAI_API_KEY || process.env.LLM_API_KEY;
   if (!key) return null;

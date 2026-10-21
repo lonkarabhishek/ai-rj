@@ -20,8 +20,11 @@ type AnyCurator = { next(): Promise<TrackInfo | null>; peek(): TrackInfo | null 
 type Phase = "idle" | "tuning" | "rj" | "song" | "waiting" | "recovering";
 interface Diag { account?: string; product?: string; scopes?: string; sdk?: string; device?: string; output?: string; error?: string; timings?: string; breaks?: string; voice?: string; script?: string; audio?: string; log?: string[] }
 type BreakKind = "none" | "stinger" | "full" | "switch";
-interface Plan { kind: BreakKind; withNews?: boolean; withJoke?: boolean }
-interface Segment { script: string; audioUrl: string | null; lang: string; kind: BreakKind }
+type SegType = "vibe" | "story" | "trivia_q" | "trivia_a" | "hot_take" | "callback" | "dedication";
+interface Plan { kind: BreakKind; withNews?: boolean; withJoke?: boolean; segment?: SegType }
+// Show bits for full breaks, rotated so the same one never runs twice in a row (trivia answers are scheduled, not drawn).
+const SEG_BAG: SegType[] = ["story", "vibe", "hot_take", "trivia_q", "callback", "dedication", "story", "vibe"];
+interface Segment { script: string; audioUrl: string | null; lang: string; kind: BreakKind; dur?: number } // dur: voice clip length in seconds
 
 const NEEDED = ["streaming", "user-modify-playback-state", "user-read-playback-state"];
 const SONG_VOL = 0.85;
@@ -104,6 +107,11 @@ function LiveInner() {
   const sinceTalkRef = useRef(0);
   const sinceJokeRef = useRef(0);
   const switchRef = useRef<ListenMode | null>(null);
+  // Show memory for the RJ: what played, a trivia answer still owed, which bits ran.
+  const historyRef = useRef<{ name: string; artists: string }[]>([]);
+  const triviaRef = useRef<{ q: string; a: string } | null>(null);
+  const lastSegRef = useRef<SegType[]>([]);
+  const onAirAtRef = useRef(0);
   const diagRef = useRef<Diag>({ log: [] });
   const wakeRef = useRef<any>(null);
   const chanRef = useRef<BroadcastChannel | null>(null);
@@ -349,7 +357,7 @@ function LiveInner() {
 
   function changeMode(m: ListenMode) {
     if (m === modeRef.current) return;
-    setListenMode(m); modeRef.current = m;
+    setListenMode(m); modeRef.current = m; triviaRef.current = null; // an owed answer doesn't survive a vibe change
     if (phaseRef.current !== "idle") {
       if (outRef.current !== "none") curatorRef.current = mkCurator(m);
       switchRef.current = m;
@@ -364,10 +372,11 @@ function LiveInner() {
     if (i === 0) { const tp = loadPrefs(), on = !tp.justMusic; return { kind: "full", withNews: on && tp.talk.news, withJoke: on && tp.talk.jokes }; }
     const m = modeRef.current, since = ++sinceTalkRef.current;
     const r = Math.random();
+    // A real FM show talks at most junctions; silence is the exception (a trivia answer owed is never skipped).
     const cfg = {
-      default: { none: 0.45, stinger: 0.3, maxGap: 3 },
-      drive: { none: 0.4, stinger: 0.3, maxGap: 3 },
-      gym: { none: 0.5, stinger: 0.5, maxGap: 3 },
+      default: { none: 0.2, stinger: 0.3, maxGap: 2 },
+      drive: { none: 0.2, stinger: 0.3, maxGap: 2 },
+      gym: { none: 0.35, stinger: 0.55, maxGap: 2 },
       focus: { none: 0.8, stinger: 0.2, maxGap: 6 },
       romantic_m: { none: 0.55, stinger: 0.15, maxGap: 4 }, // softer, rarer: a late-night RJ speaks only when it's worth it
       romantic_f: { none: 0.55, stinger: 0.15, maxGap: 4 },
@@ -375,6 +384,7 @@ function LiveInner() {
     if (loadPrefs().justMusic) { cfg.none = Math.max(cfg.none, 0.7); cfg.maxGap = Math.max(cfg.maxGap, 4); }
     let kind: BreakKind = r < cfg.none ? "none" : r < cfg.none + cfg.stinger ? "stinger" : "full";
     if (kind === "none" && since >= cfg.maxGap) kind = m === "gym" || m === "focus" ? "stinger" : "full";
+    if (triviaRef.current && !loadPrefs().justMusic) kind = "full";
     if ((m === "gym" || m === "focus") && kind === "full" && canDuck()) kind = "stinger";
     // Talk-over stingers only work in the in-browser player (we can duck the song). On a phone / Spotify Connect a stinger
     // would be a lone "here's <song>" line before the track, so make it a real break instead (Focus stays quiet).
@@ -386,22 +396,48 @@ function LiveInner() {
     const withNews = kind === "full" && newsDue && (m === "default" || m === "drive") && tp.talk.news && !tp.justMusic;
     const withJoke = kind === "full" && !isRomantic(m) && ++sinceJokeRef.current >= 2 && Math.random() < 0.6 && tp.talk.jokes && !tp.justMusic;
     if (withJoke) sinceJokeRef.current = 0;
-    return { kind, withNews, withJoke };
+    return { kind, withNews, withJoke, segment: kind === "full" ? nextSegment(withNews) : undefined };
+  }
+  function nextSegment(withNews: boolean): SegType {
+    if (triviaRef.current) return "trivia_a";
+    if (withNews) return "vibe"; // news is the bit this time
+    const recent = lastSegRef.current.slice(-2), facts = loadPrefs().talk.facts;
+    const ok = SEG_BAG.filter((s) => !recent.includes(s) && (facts || (s !== "story" && s !== "trivia_q")) && (s !== "callback" || historyRef.current.length >= 3));
+    const s = ok[Math.floor(Math.random() * ok.length)] ?? "vibe";
+    lastSegRef.current = [...lastSegRef.current, s].slice(-4);
+    return s;
   }
 
   // ---------- audio ----------
+  /** Voice fade. Stops on its own if another clip takes the element (a stale fade must never turn the next clip down). */
   function fadeEl(a: HTMLAudioElement, to: number, ms: number) {
+    const clip = clipIdRef.current;
     return new Promise<void>((res) => {
       const from = a.volume, steps = 15; let i = 0;
-      const t = setInterval(() => { i++; a.volume = Math.max(0, Math.min(1, from + (to - from) * (i / steps))); if (i >= steps) { clearInterval(t); res(); } }, ms / steps);
+      const t = setInterval(() => {
+        if (clipIdRef.current !== clip) { clearInterval(t); res(); return; }
+        i++; a.volume = Math.max(0, Math.min(1, from + (to - from) * (i / steps))); if (i >= steps) { clearInterval(t); res(); }
+      }, ms / steps);
     });
   }
-  async function fadeSdk(to: number, ms: number) {
+  /** Song volume fade. Only the newest fade runs: an older one (say, the fade-out of the last song) quits the moment a new one starts,
+   *  so two loops can never fight and leave a fresh song stuck near zero. */
+  const fadeIdRef = useRef(0);
+  const songVolRef = useRef(SONG_VOL); // last volume we set, so fades don't need a slow getVolume round-trip
+  async function setSongVol(v: number) {
+    songVolRef.current = v;
     const y = ytRef.current;
-    const pl = outRef.current === "youtube" && y ? { getVolume: async () => y.getVolume01(), setVolume: async (v: number) => y.setVolume01(v) } : playerRef.current;
-    if (!pl) return;
-    const from = (await pl.getVolume().catch(() => SONG_VOL)) as number, steps = 10;
-    for (let i = 1; i <= steps; i++) { await pl.setVolume(Math.max(0.0001, from + (to - from) * (i / steps))).catch(() => {}); await sleep(ms / steps); }
+    if (outRef.current === "youtube" && y) y.setVolume01(v); else await playerRef.current?.setVolume(Math.max(0.0001, v)).catch(() => {});
+  }
+  async function fadeSdk(to: number, ms: number) {
+    const id = ++fadeIdRef.current;
+    if (outRef.current !== "youtube" && !playerRef.current) return;
+    const from = songVolRef.current, steps = Math.max(4, Math.round(ms / 80));
+    for (let i = 1; i <= steps; i++) {
+      if (fadeIdRef.current !== id) return;
+      await setSongVol(from + (to - from) * (i / steps));
+      await sleep(ms / steps);
+    }
   }
   // Voice amplitude for the mascot. Skipped on iOS/Safari: routing the element through Web Audio there can mute it if the context suspends.
   const analyserRef = useRef<{ an: AnalyserNode; buf: Uint8Array<ArrayBuffer> } | null>(null);
@@ -565,16 +601,35 @@ function LiveInner() {
     });
   }
 
+  /** Voice clip length, for timing talk-overs. Some MP3s report no duration until played: estimate from the text then. */
+  function clipSeconds(url: string, text: string): Promise<number> {
+    const est = Math.max(2, [...text].length / 14);
+    return new Promise((res) => {
+      const a = new Audio(); a.preload = "metadata";
+      const done = (v?: number) => { a.onloadedmetadata = a.onerror = null; a.removeAttribute("src"); res(v && Number.isFinite(v) && v > 0.5 ? v : est); };
+      a.onloadedmetadata = () => done(a.duration); a.onerror = () => done();
+      setTimeout(() => done(), 1500);
+      a.src = url;
+    });
+  }
+
   // ---------- RJ segments (never throw: a failed RJ just means more music) ----------
   async function buildSegment(p: Prefs, next: TrackInfo | null, prev: TrackInfo | null, index: number, plan: Plan = { kind: "full" }): Promise<Segment | null> {
     if (plan.kind === "none") return null;
+    const trivia = plan.segment === "trivia_a" ? triviaRef.current : null;
+    if (trivia) triviaRef.current = null; // one shot: owed answers never pile up, even if this break fails
     try {
       const seg = await withTimeout(fetch("/api/segment", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prefs: p, next, prev, index, mode: modeRef.current, recent: recentRef.current.slice(-4), hour: new Date().getHours(), kind: plan.kind, withNews: !!plan.withNews, withJoke: !!plan.withJoke }),
-      }).then(async (r) => { if (!r.ok) throw new Error(`segment ${r.status} ${(await r.text().catch(() => "")).slice(0, 120)}`); return r.json(); }), 20000, "segment");
+        body: JSON.stringify({
+          prefs: p, next, prev, index, mode: modeRef.current, recent: recentRef.current.slice(-6), hour: new Date().getHours(), kind: plan.kind, withNews: !!plan.withNews, withJoke: !!plan.withJoke,
+          segment: plan.segment, trivia, history: historyRef.current.slice(-8),
+          minutes: onAirAtRef.current ? Math.round((Date.now() - onAirAtRef.current) / 60000) : 0,
+        }),
+      }).then(async (r) => { if (!r.ok) throw new Error(`segment ${r.status} ${(await r.text().catch(() => "")).slice(0, 120)}`); return r.json(); }), 25000, "segment");
       setDiag({ script: `${seg.mode ?? "?"} ok` });
-      breaksRef.current = [...breaksRef.current, `${plan.kind}:${!seg.script ? "skip" : seg.mode === "llm" ? "claude" : "template"}`].slice(-6);
+      if (seg.trivia?.a && !isRomantic(modeRef.current)) triviaRef.current = { q: String(seg.trivia.q), a: String(seg.trivia.a) };
+      breaksRef.current = [...breaksRef.current, `${plan.kind}${seg.segment && seg.segment !== "vibe" ? `/${seg.segment}` : ""}:${!seg.script ? "skip" : seg.mode === "llm" ? "claude" : "template"}`].slice(-6);
       setDiag({ breaks: breaksRef.current.join(" · ") });
       seg.script = stripTags(String(seg.script ?? ""));
       if (!seg.script) { log(`RJ chose silence (${plan.kind})`); return null; }
@@ -583,7 +638,10 @@ function LiveInner() {
       const lang = { english: "en-IN", hinglish: "hi-IN", hindi: "hi-IN", marathi: "mr-IN" }[p.language];
       if (ttsQuotaRef.current) { log("ElevenLabs credits used up: browser voice"); return { script: seg.script, audioUrl: null, lang, kind: plan.kind }; }
       try {
-        const r = await withTimeout(fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: seg.script, voiceId: p.voiceId, energy: p.energy, mode: modeRef.current, language: p.language, mood: seg.mood }) }), 30000, "voice");
+        const tts = () => withTimeout(fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: seg.script, voiceId: p.voiceId, energy: p.energy, mode: modeRef.current, language: p.language, mood: seg.mood }) }), 20000, "voice");
+        // One retry on a transient failure (network blip, 5xx) before dropping to the robotic browser voice.
+        let r = await tts().catch(async (e) => { log(`voice failed once (${e}), retrying`); await sleep(800); return tts(); });
+        if (!r.ok && r.status >= 500) { const j = await r.clone().json().catch(() => ({})); if (j.code !== "quota_exceeded") { log(`voice ${r.status}, retrying`); await sleep(800); r = await tts(); } }
         if (!r.ok) {
           const j = await r.json().catch(() => ({}));
           if (j.code === "quota_exceeded") { ttsQuotaRef.current = true; setNotice("Voice service unavailable (ElevenLabs credits used up, Azure not set up). Using the browser voice for now."); setTimeout(() => setNotice(null), 6000); }
@@ -594,7 +652,8 @@ function LiveInner() {
         const blob = await r.blob();
         if (!blob.size || !/audio/.test(blob.type)) throw new Error(`voice returned ${blob.type || "nothing"} (${blob.size}B)`);
         setDiag({ voice: `${prov ?? "ok"} ${Math.round(blob.size / 1024)}KB${fb ? ` (fallback after ${fb})` : ""}` });
-        return { script: seg.script, audioUrl: URL.createObjectURL(blob), lang, kind: plan.kind };
+        const url = URL.createObjectURL(blob);
+        return { script: seg.script, audioUrl: url, lang, kind: plan.kind, dur: await clipSeconds(url, seg.script) };
       } catch (e) { log(`RJ voice failed, using browser voice: ${e}`); setDiag({ voice: `failed: ${String(e).slice(0, 160)}` }); return { script: seg.script, audioUrl: null, lang, kind: plan.kind }; }
     } catch (e) { log(`RJ script failed: ${e}`); setDiag({ script: `failed: ${String(e).slice(0, 160)}` }); return null; }
   }
@@ -683,14 +742,16 @@ function LiveInner() {
     return "none";
   }
 
-  async function startOn(device: string, t: TrackInfo) {
+  /** Starts a song. With `after`, the next song is queued behind it on the device, so playback carries on by itself if this page is frozen. */
+  async function startOn(device: string, t: TrackInfo, after?: TrackInfo | null) {
+    const body = JSON.stringify({ uris: [t.uri, ...(after?.uri && after.uri !== t.uri ? [after.uri] : [])] });
     try {
-      await sp(`/me/player/play?device_id=${device}`, { method: "PUT", body: JSON.stringify({ uris: [t.uri] }) });
+      await sp(`/me/player/play?device_id=${device}`, { method: "PUT", body });
     } catch (e) {
       log(`play failed, transferring + retry: ${e}`);
       await sp("/me/player", { method: "PUT", body: JSON.stringify({ device_ids: [device], play: false }) }).catch(() => {});
       await sleep(1200);
-      await sp(`/me/player/play?device_id=${device}`, { method: "PUT", body: JSON.stringify({ uris: [t.uri] }) });
+      await sp(`/me/player/play?device_id=${device}`, { method: "PUT", body });
     }
   }
 
@@ -702,12 +763,18 @@ function LiveInner() {
     setScript(seg.script); setSpeaking(true);
     log(`talk-over (${seg.kind})`);
     talkingRef.current = (async () => {
-      await fadeSdk(DUCK, 700);
-      await jingle();
-      await playClip(seg.audioUrl!, { maxMs: 60000, bindSkip: false, voice: true });
+      await Promise.all([fadeSdk(DUCK, 700), jingle()]); // duck under the sweeper, like a real desk
+      await playClip(seg.audioUrl!, { maxMs: 90000, bindSkip: false, voice: true });
       setSpeaking(false);
       if (phaseRef.current === "song") await fadeSdk(SONG_VOL, 1600);
     })().finally(() => { talkingRef.current = null; });
+  }
+  /** When to start talking over a song's outro: about half the clip over the old song's ending, the rest over the next song's intro. */
+  const outroLeadMs = (seg: Segment) => Math.min(18000, Math.max(7000, (seg.dur ?? 12) * 550 + 2000));
+  /** A song that should be playing at full volume but was left ducked or faded (lost fade, interrupted talk-over): bring it back. */
+  function volumeGuard(fading: boolean, since: number) {
+    if (talkingRef.current || fading || Date.now() - since < 3500) return;
+    if (songVolRef.current < SONG_VOL * 0.6) { log(`song was left at ${Math.round(songVolRef.current * 100)}% volume, restoring`); fadeSdk(SONG_VOL, 800); }
   }
 
   /**
@@ -719,10 +786,12 @@ function LiveInner() {
    */
   async function playSdk(t: TrackInfo, sid: number, over?: Segment | null, outro?: Promise<Segment | null> | null): Promise<boolean> {
     const talking = !!talkingRef.current;
-    await playerRef.current.setVolume(talking ? DUCK : 0.0001).catch(() => {});
+    fadeIdRef.current++; // cancel any fade still running from the last song
+    await setSongVol(talking || over?.audioUrl ? DUCK : 0.12);
     await startOn(deviceRef.current!, t);
     if (over?.audioUrl) talkOver(over);
-    else if (!talking) fadeSdk(SONG_VOL, 1200);
+    else if (!talking) fadeSdk(SONG_VOL, 600); // quick swell in: the old song only just faded, so there's no dead air
+    const tStart = Date.now();
     let ready: Segment | null | undefined;
     outro?.then((x) => { ready = x; }).catch(() => { ready = null; });
     let skipped = false, started = false, nullStates = 0, usedOutro = false, fading = false;
@@ -740,15 +809,16 @@ function LiveInner() {
       if (st.duration) setProgress(st.position / st.duration);
       if (started && st.paused && st.position === 0) break;
       const left = st.duration ? st.duration - st.position : Infinity;
-      // RJ over the outro: start ~10s before the end (only for clips; switch lines wait for the gap)
-      if (!usedOutro && !talkingRef.current && left <= 10000 && left > 4000 && ready?.audioUrl && ready.kind !== "switch") {
+      if (!st.paused) volumeGuard(fading, tStart);
+      // RJ over the outro, timed from the clip's length so the voice straddles both songs (switch lines wait for the gap)
+      if (!usedOutro && !talkingRef.current && ready?.audioUrl && ready.kind !== "switch" && left <= outroLeadMs(ready) && left > 3000) {
         usedOutro = true; talkOver(ready);
       }
       if (talkingRef.current) { if (left <= 700) break; continue; } // keep the bed of music under the voice until the very end
-      if (!fading && left <= 3200) { fading = true; fadeSdk(0.0001, 2600); }
-      if (left <= 500) break;
+      if (!fading && left <= 1900) { fading = true; fadeSdk(0.12, 1500); if (!outro) jingle(); } // no break coming: short fade + station sweeper, straight into the next song
+      if (left <= 350) break;
     }
-    if (skipped) await fadeSdk(0.0001, 600);
+    if (skipped) await fadeSdk(0.0001, 500);
     if (!talkingRef.current) await playerRef.current.pause().catch(() => {});
     return usedOutro;
   }
@@ -778,7 +848,8 @@ function LiveInner() {
   async function playYt(t: TrackInfo, sid: number, over?: Segment | null, outro?: Promise<Segment | null> | null): Promise<boolean> {
     const y = yt();
     const talking = !!talkingRef.current;
-    y.setVolume01(talking ? DUCK : 0.0001);
+    fadeIdRef.current++; // cancel any fade still running from the last song
+    await setSongVol(talking || over?.audioUrl ? DUCK : 0.12);
     ytLoadAtRef.current = Date.now(); ytPlayAtRef.current = 0; ytAutoRef.current = 0;
     y.load(t.ytId!);
     let skipped = false;
@@ -797,7 +868,7 @@ function LiveInner() {
       if (y.error !== null && curatorRef.current instanceof YtCurator) curatorRef.current.markBad(t.ytId!);
       return false;
     }
-    if (over?.audioUrl) talkOver(over); else if (!talking) fadeSdk(SONG_VOL, 1200);
+    if (over?.audioUrl) talkOver(over); else if (!talking) fadeSdk(SONG_VOL, 600);
     let ready: Segment | null | undefined;
     outro?.then((x) => { ready = x; }).catch(() => { ready = null; });
     let usedOutro = false, fading = false;
@@ -805,7 +876,8 @@ function LiveInner() {
     while (alive(sid) && !skipped) {
       await sleep(400);
       if (pausedRef.current) continue;
-      if (!talkingRef.current && !fading && Date.now() - tStart > 3000 && y.getVolume01() < 0.2) y.setVolume01(SONG_VOL); // never leave a playing song at ~0 volume
+      if (!talkingRef.current && !fading && Date.now() - tStart > 3000 && y.getVolume01() < 0.2) { songVolRef.current = y.getVolume01(); fadeSdk(SONG_VOL, 600); } // never leave a playing song at ~0 volume
+      else volumeGuard(fading, tStart);
       if ((y.state as YtState) === 0) break;
       // Safety net for ads (Premium should be ad-free): another video id or a duration far off from the song's.
       const dur = y.duration(), pos = y.time();
@@ -815,21 +887,33 @@ function LiveInner() {
       setStatus("");
       if (dur) setProgress(pos / dur);
       const left = dur ? (dur - pos) * 1000 : Infinity;
-      if (!usedOutro && !talkingRef.current && left <= 10000 && left > 4000 && ready?.audioUrl && ready.kind !== "switch" && canDuck()) { usedOutro = true; talkOver(ready); }
+      if (!usedOutro && !talkingRef.current && ready?.audioUrl && ready.kind !== "switch" && canDuck() && left <= outroLeadMs(ready) && left > 3000) { usedOutro = true; talkOver(ready); }
       if (talkingRef.current) { if (left <= 700) break; continue; }
-      if (!fading && left <= 3200 && canDuck()) { fading = true; fadeSdk(0.0001, 2600); }
-      if (left <= 500) break;
+      if (!fading && left <= 1900 && canDuck()) { fading = true; fadeSdk(0.12, 1500); if (!outro) jingle(); }
+      if (left <= 350) break;
     }
-    if (skipped) await fadeSdk(0.0001, 600);
+    if (skipped) await fadeSdk(0.0001, 500);
     if (!talkingRef.current) { ytSelfAtRef.current = Date.now(); y.pause(); }
     return usedOutro;
   }
 
   const connectFailRef = useRef(0);
   const volSetRef = useRef(false);
-  async function playConnect(t: TrackInfo, sid: number) {
+  /** The song Spotify moved on to by itself (the page was frozen or late at the end of the last one): adopted, not restarted. */
+  const advancedToRef = useRef<string | null>(null);
+  /** Spotify Connect (the phone's Spotify app). No volume control here, so transitions are tight cuts timed to the end of the song.
+   *  Returns "advanced" when the device already moved on to the queued next song by itself (no RJ break at that junction). */
+  async function playConnect(t: TrackInfo, sid: number, after?: Promise<TrackInfo | null> | null): Promise<"advanced" | void> {
     const dev = connectDeviceRef.current!;
-    await startOn(dev, t);
+    let adopted = false;
+    if (advancedToRef.current && advancedToRef.current === t.uri) {
+      const now = await sp<any>("/me/player").catch(() => null);
+      adopted = !!now?.is_playing && now.item?.uri === t.uri;
+      if (adopted) log("Spotify already moved on to this song: keeping it");
+    }
+    advancedToRef.current = null;
+    const queued = adopted || !after ? null : await Promise.race([after.catch(() => null), sleep(1500).then(() => null)]);
+    if (!adopted) await startOn(dev, t, queued);
     if (!volSetRef.current) { volSetRef.current = true; sp(`/me/player/volume?volume_percent=85&device_id=${dev}`, { method: "PUT" }).catch(() => {}); }
     let skipped = false, started = false;
     skipRef.current = () => { skipped = true; };
@@ -848,12 +932,20 @@ function LiveInner() {
       if (started && st?.item?.uri === t.uri && !st.is_playing && st.progress_ms > 0 && st.item.duration_ms - st.progress_ms > 3000) { syncExternal(false); continue; }
       if (!st?.item) { if (!started && Date.now() - t0 > 10000 && !spotifyBackoffMs()) throw new Error("song never started on device"); continue; }
       if (!started && st.item.uri === t.uri && !st.is_playing && Date.now() - t0 > 6000 && !spotifyBackoffMs()) throw new Error("song paused itself on the device");
-      if (st.item.uri !== t.uri) { if (started) break; continue; }
+      if (st.item.uri !== t.uri) {
+        // Only the song WE queued counts as moving on by itself; anything else was picked in the Spotify app (old behaviour: pause, carry on).
+        if (started || adopted) { if (st.is_playing && queued?.uri === st.item.uri) { advancedToRef.current = st.item.uri; connectFailRef.current = 0; return "advanced"; } break; }
+        continue;
+      }
       if (st.is_playing) started = true;
-      endsAt = Date.now() + (st.item.duration_ms - st.progress_ms);
+      const left = st.item.duration_ms - st.progress_ms;
+      endsAt = Date.now() + left;
       deadline = Math.max(deadline, endsAt + 15000);
       setProgress(st.progress_ms / st.item.duration_ms);
-      if (st.item.duration_ms - st.progress_ms < 2500) break;
+      if (st.is_playing && left < 4500) { // near the end: wait it out locally and cut ~0.9s before the last note, not 2.5s early
+        for (const until = Date.now() + Math.max(0, left - 900); Date.now() < until && !skipped && alive(sid);) await sleep(100);
+        break;
+      }
       if (started && !st.is_playing && st.progress_ms === 0) break;
     }
     await sp(`/me/player/pause?device_id=${dev}`, { method: "PUT" }).catch(() => {});
@@ -861,11 +953,12 @@ function LiveInner() {
   }
 
   /** Returns true if the song played (or was skipped by the user), false on a playback failure. */
-  async function playSong(t: TrackInfo, sid: number, over?: Segment | null, outro?: Promise<Segment | null> | null): Promise<boolean | "outro"> {
+  async function playSong(t: TrackInfo, sid: number, over?: Segment | null, outro?: Promise<Segment | null> | null, after?: Promise<TrackInfo | null> | null): Promise<boolean | "outro"> {
     musicActiveRef.current = true;
-    try { return await playSongInner(t, sid, over, outro); } finally { musicActiveRef.current = false; }
+    try { return await playSongInner(t, sid, over, outro, after); } finally { musicActiveRef.current = false; }
   }
-  async function playSongInner(t: TrackInfo, sid: number, over?: Segment | null, outro?: Promise<Segment | null> | null): Promise<boolean | "outro"> {
+  /** true = played (or skipped by the listener); "outro" = the next break is used up (spoken over the outro, or Spotify moved on by itself); false = failed. */
+  async function playSongInner(t: TrackInfo, sid: number, over?: Segment | null, outro?: Promise<Segment | null> | null, after?: Promise<TrackInfo | null> | null): Promise<boolean | "outro"> {
     setNow(t); setProgress(0);
     const o = outRef.current;
     const t0 = Date.now();
@@ -874,8 +967,7 @@ function LiveInner() {
       if ((o === "sdk" || o === "connect") && t.uri) {
         setPhase("song"); setStatus(o === "sdk" ? "" : `Playing on ${(diagRef.current.device ?? "your device").replace(/\s*\([^)]*\)$/, "")}`);
         if (o === "sdk") return (await playSdk(t, sid, over, outro)) ? "outro" : true;
-        await playConnect(t, sid);
-        return true;
+        return (await playConnect(t, sid, after)) === "advanced" ? "outro" : true;
       }
       if (t.previewUrl) { setPhase("song"); setStatus("30-second preview"); await playClip(t.previewUrl, { maxMs: 29000, fadeIn: true }); return true; }
       setPhase("waiting");
@@ -901,6 +993,8 @@ function LiveInner() {
   }
 
   async function recover(sid: number, why: string) {
+    // YouTube failures are bad or blocked videos (already marked and skipped): reconnecting Spotify here used to strand YouTube listeners.
+    if (outRef.current === "youtube") { log(`YouTube: ${why}, carrying on with the next video`); return; }
     setPhase("recovering"); setNotice(`Reconnecting to Spotify… (${why})`); log(`recovering: ${why}`);
     connectDeviceRef.current = null;
     outRef.current = await setupSpotify(sid);
@@ -940,6 +1034,7 @@ function LiveInner() {
     let firstDone = false;
     firstP.then((t) => { firstDone = true; if (alive(sid) && phaseRef.current === "tuning") setUpNext(t); });
     sinceTalkRef.current = 0; sinceJokeRef.current = 1; lastNewsRef.current = 0; switchRef.current = null;
+    historyRef.current = []; triviaRef.current = null; lastSegRef.current = []; onAirAtRef.current = Date.now();
     let introP = timed("rj intro", firstP.then((t) => buildSegment(effPrefs(), t, null, 0, planBreak(0))));
     const outP = timed(wantYt ? "youtube" : "spotify", wantYt ? setupYoutube() : setupSpotify(sid));
     outRef.current = await outP;
@@ -980,17 +1075,36 @@ function LiveInner() {
       await jingle();
       const bed = seg.kind === "full" && seg.script.length > 140;
       if (bed) startBed();
-      try { if (seg.audioUrl) await playClip(seg.audioUrl, { maxMs: 90000, voice: true }); else await speakBrowser(seg.script, seg.lang); }
-      finally { bedRef.current?.stop(); }
+      const clip = (seg.audioUrl ? playClip(seg.audioUrl, { maxMs: 90000, voice: true }) : speakBrowser(seg.script, seg.lang)).finally(() => bedRef.current?.stop());
+      // Phone Spotify takes ~0.5-1s to start a song: fire it just before the RJ's last word so there's no dead air.
+      const lead = outRef.current === "connect" && seg.audioUrl && next ? 700 : 0;
+      await (lead ? Promise.race([clip, voiceNearEnd(lead, sid)]) : clip);
     };
+    /** Resolves when the RJ clip has `ms` left (never while paused). */
+    const voiceNearEnd = async (ms: number, s: number) => {
+      for (;;) {
+        await sleep(100);
+        if (!alive(s)) return;
+        const [cur, dur] = clock();
+        if (!pausedRef.current && cur > 0.5 && dur > 0 && (dur - cur) * 1000 <= ms) return;
+      }
+    };
+    /** Waits for p, but Next ends the wait (the listener never has to sit through a slow RJ or a music search). */
+    const skippable = <T,>(p: Promise<T>, onSkip: T) => new Promise<T>((res) => {
+      let done = false;
+      const end = (v: T) => { if (!done) { done = true; res(v); } };
+      skipRef.current = () => { log("Next while waiting: moving on"); end(onSkip); };
+      p.then(end, () => end(onSkip));
+    });
+    let loopErrors = 0;
 
     for (let i = 0; alive(sid); i++) {
       try {
         // Mode switched mid-stream: fresh track from the new mode + a short transition line, right now.
         if (switchRef.current) {
           switchRef.current = null;
-          next = await nextTrack(); setUpNext(next);
-          const sw = await buildSegment(effPrefs(), next, prev, i, { kind: "switch" });
+          next = await skippable(nextTrack(), null); setUpNext(next);
+          const sw = await skippable(buildSegment(effPrefs(), next, prev, i, { kind: "switch" }), null);
           if (!alive(sid)) break;
           if (sw) await speak(sw);
           pending = null;
@@ -998,11 +1112,12 @@ function LiveInner() {
 
         let over: Segment | null = null;
         if (pending) {
-          const seg = await pending;
+          const seg = await skippable(pending, null);
           if (!alive(sid)) break;
           if (seg) {
-            // stingers ride over the song intro when we control the volume (in-browser player)
-            if (seg.kind === "stinger" && seg.audioUrl && canDuck() && next) over = seg;
+            // When we control the volume, the RJ rides over the next song's intro (FM style) instead of stopping the music.
+            // Show openers and mode-switch lines keep the stage to themselves.
+            if ((seg.kind === "stinger" || (seg.kind === "full" && prev)) && seg.audioUrl && canDuck() && next) over = seg;
             else await speak(seg);
           }
         }
@@ -1012,9 +1127,9 @@ function LiveInner() {
         if (!next) {
           setPhase("waiting");
           setStatus(outRef.current === "none" ? "Connect Spotify or YouTube for music. Your RJ will keep you company." : "Finding more music…");
-          await sleep(outRef.current === "none" ? 45000 : 8000);
+          await skippable(sleep(outRef.current === "none" ? 45000 : 8000), undefined);
           if (outRef.current !== "none" && !curatorRef.current) curatorRef.current = mkCurator(modeRef.current);
-          next = await nextTrack(); setUpNext(next);
+          next = await skippable(nextTrack(), null); setUpNext(next);
           pending = outRef.current === "none" ? buildSegment(effPrefs(), null, prev, i + 1, { kind: "full", withJoke: true }) : null;
           continue;
         }
@@ -1026,18 +1141,21 @@ function LiveInner() {
         const prefetch = following.then((t) => { setUpNext(t); return buildSegment(effPrefs(), t, current, segIndex, plan); }).catch(() => null);
         await waitIfPaused(sid);
         if (!alive(sid)) break;
-        const res = await playSong(current, sid, over, plan.kind === "none" ? null : prefetch);
+        const res = await playSong(current, sid, over, plan.kind === "none" ? null : prefetch, following);
         const ok = res !== false;
         if (!alive(sid)) break;
         prev = current;
+        if (ok) historyRef.current = [...historyRef.current, { name: current.name, artists: current.artists }].slice(-12);
         next = await following.catch(() => null);
         pending = plan.kind === "none" || res === "outro" ? null : prefetch;
         if (ok) failures = 0;
         else if (++failures >= 2) { await recover(sid, "two songs failed"); failures = 0; }
+        loopErrors = 0;
       } catch (e) {
         log(`loop error: ${e}`);
         await sleep(3000);
         pending = null;
+        if (++loopErrors >= 2) { loopErrors = 0; next = await nextTrack().catch(() => null); setUpNext(next); log("loop: moving past the song that keeps failing"); }
       }
     }
   }
@@ -1046,7 +1164,7 @@ function LiveInner() {
     setPausedState(false); appliedPauseRef.current = false; voicePausedRef.current = false; ctxRef.current?.resume().catch(() => {});
     sessionRef.current++; skipRef.current();
     audioRef.current?.pause(); playerRef.current?.pause().catch(() => {}); ytSelfAtRef.current = Date.now(); ytRef.current?.pause();
-    bedRef.current?.stop(); setSpeaking(false); talkingRef.current = null;
+    bedRef.current?.stop(); setSpeaking(false); talkingRef.current = null; advancedToRef.current = null; fadeIdRef.current++;
     wakeRef.current?.release?.().catch(() => {});
     setPhase("idle"); setNow(null); setUpNext(null); setScript(""); setStatus("");
     setNotice(msg ?? null);

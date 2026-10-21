@@ -45,7 +45,8 @@ Copy `.env.example` to `.env.local`. Ask the human for each value.
 | Variable | Required? | Where to get it |
 | --- | --- | --- |
 | `ANTHROPIC_API_KEY` | Recommended (templates otherwise) | https://console.anthropic.com → API Keys |
-| `ANTHROPIC_MODEL` | Optional | Model id override; default is a small Haiku model |
+| `ANTHROPIC_MODEL` | Optional | Fast model for stingers, switch lines and the fallback; default `claude-haiku-5-5` |
+| `ANTHROPIC_MODEL_FULL` | Optional | Writer for full breaks and show segments; default `claude-sonnet-5-5` (costs more than Haiku; set it to the Haiku id to keep costs down) |
 | `AZURE_SPEECH_KEY` | Recommended (browser voice otherwise) | Azure Portal → Speech service → Keys and Endpoint |
 | `AZURE_SPEECH_REGION` | With the Azure key (default `centralindia`) | Same page, "Location/Region" |
 | `AZURE_TTS_BASE` | Optional | Custom TTS base URL |
@@ -125,7 +126,8 @@ Key behaviours to know before editing:
 
 - **Romantic Hindi presets:** `ListenMode` also has `romantic_m` and `romantic_f` (`ROMANTIC_MODES` in `src/lib/prefs.ts`: label, voice id, fallback voice). They are not in `MODES`; the picker shows them in their own row. For that session only they force Hindi songs (`effectiveSongLangs()`), Hindi RJ, soft energy and their own voice (`effPrefs()` in `live/page.tsx`, and `/api/tts` enforces it server-side via `romanticVoice()`). Songs: `ROMANTIC_QUERIES` / `NOT_ROMANTIC_RE` in both `Curator` and `YtCurator`. Script rules: `MODE_RULES` in `script.ts`; `/api/segment` forces Hindi and no jokes/news. SSML prosody and style (only if the voice's StyleList has it) are in `buildSsml()`. Tests: `tests/e2e/romantic.spec.ts`. Verify new voice ids against the live Azure list; never invent keys.
 - **Playback state machine:** `src/app/live/page.tsx` (`phase`: idle, tuning, song, rj, waiting, recovering). Play/pause goes through one path. Don't add parallel timers.
-- **RJ script generation:** `llmScript()` in `src/lib/script.ts`, called by `/api/segment`. All text shown or spoken must pass `stripTags()`.
+- **RJ script generation:** `llmScript()` in `src/lib/script.ts`, called by `/api/segment`. All text shown or spoken must pass `stripTags()`. Full breaks run a show segment (`SegmentType`: story, trivia_q/trivia_a, hot_take, callback, dedication, vibe) chosen by `nextSegment()` in `live/page.tsx` and checked by `segmentFor()`; a trivia question's answer comes back on a hidden `ANSWER:` line (`splitAnswer()`), is held client-side and revealed at the next break. Breaks get the session's played songs (`history`).
+- **Transitions:** where we control song volume (desktop Spotify SDK, YouTube off iOS) the RJ talks over the outro and the next intro (`outroLeadMs()`), fades go through `fadeSdk()` (newest fade wins; never set volume directly) and `volumeGuard()` restores a song left ducked. Phone Spotify (Connect) and iOS YouTube can't duck: tight cuts, the next song is queued on the device (`startOn(..., after)`) and adopted if Spotify moved on by itself while the page was frozen.
 - **TTS:** `/api/tts` tries the chosen provider then the other, else the client falls back to browser `speechSynthesis`.
 - **YouTube:** `YtCurator.ok()` filters candidates (language, length, `looksLikeSong`); server `details()` drops non-embeddable, age-restricted, live and compilation videos.
 

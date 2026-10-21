@@ -1,6 +1,6 @@
 import { fetchHeadlines } from "@/lib/news";
 import { isRomantic } from "@/lib/prefs";
-import { llmScript, splitMood, templateScript, type SegmentInput } from "@/lib/script";
+import { llmScript, segmentFor, splitAnswer, splitMood, templateScript, type SegmentInput } from "@/lib/script";
 
 export async function POST(req: Request) {
   const body = (await req.json()) as Omit<SegmentInput, "headlines">;
@@ -32,8 +32,12 @@ export async function POST(req: Request) {
   });
   headlines.splice(0, headlines.length, ...freshNews);
   const input = { ...body, headlines };
-  const llm = await llmScript(input);
-  const { mood, text } = splitMood(llm ?? templateScript(input));
+  const segment = segmentFor(input);
+  const llm = await llmScript({ ...input, segment });
+  // A trivia question carries its answer on a hidden last line: keep it for the next break, never speak it.
+  const { text: raw, answer } = splitAnswer(llm ?? templateScript(input));
+  const { mood, text } = splitMood(raw.replace(/\s+/g, " "));
+  const trivia = llm && segment === "trivia_q" && answer && text ? { q: text.slice(-220), a: answer } : null;
   const defaultMood = { default: "cheerful", drive: "cheerful", gym: "hype", focus: "calm", romantic_m: "warm", romantic_f: "warm" }[body.mode ?? "default"];
-  return Response.json({ script: text, mood: mood ?? defaultMood, kind: body.kind ?? "full", mode: llm !== null ? "llm" : "template", headlines: headlines.slice(0, 2) });
+  return Response.json({ script: text, mood: mood ?? defaultMood, kind: body.kind ?? "full", mode: llm !== null ? "llm" : "template", segment: llm ? segment : "vibe", trivia, headlines: headlines.slice(0, 2) });
 }
