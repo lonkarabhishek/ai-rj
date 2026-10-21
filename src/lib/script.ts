@@ -296,7 +296,8 @@ Written for speech, read aloud by a TTS voice:
 - Short, rhythmic sentences that sound good out loud.
 - ${mode.startsWith("romantic") ? "Always Devanagari Hindi (song and artist names may stay in English). Use [warm] or [calm] as the delivery tag. " : ""}Start your reply with a delivery tag for the voice, exactly one of [hype] [cheerful] [warm] [calm], matching the line's energy (e.g. [hype] for gym, [cheerful] for a fun break, [warm] for a heartfelt song, [calm] for focus). Then the words.
 
-Never use filler like "that was a great song" or "what a song": every line should be a story, an opinion, a joke, a feeling or a real moment.`;
+Never use filler like "that was a great song" or "what a song": every line should be a story, an opinion, a joke, a feeling or a real moment.${
+  mode.startsWith("romantic") || mode === "focus" ? " In this mode silence is part of the style: if you have nothing good, reply with exactly SKIP and the music just keeps flowing." : ""}`;
 }
 
 /** Pulls the hidden "ANSWER: ..." line a trivia question carries, so it is never spoken. */
@@ -362,7 +363,7 @@ export async function llmScript(input: SegmentInput): Promise<string | null> {
     played.length > 1 && !stinger && !isSwitch ? `Played so far this session (oldest first): ${played.join("; ")}.` : "",
     isSwitch ? `The listener just switched to ${mode === "default" ? "My Mix" : rom ? "Romantic Hindi" : mode} mode. Say ONE short, fitting transition line (under 12 words) that acknowledges the switch with the new energy, then nothing else. Do not SKIP.` :
     stinger ? "This is a STINGER: ONE short line (under 15 words) said over the song's intro: a quick fact, a reaction or the vibe of the next song. If you truly have nothing, reply SKIP." :
-      `This is a full break, spoken over the end of one song and the start of the next: 2 to 5 sentences, under ${seg === "story" || seg === "trivia_a" ? 90 : 70} words total. Do not SKIP.`,
+      `This is a full break, spoken over the end of one song and the start of the next: 2 to 5 sentences, under ${seg === "story" || seg === "trivia_a" ? 90 : 70} words total.${rom || mode === "focus" ? " If you truly have nothing worth saying, reply SKIP." : " Do not SKIP."}`,
     !stinger && !isSwitch && !rom && seg !== "vibe" ? SEGMENT_RULES[seg] : "",
     seg === "trivia_a" && input.trivia ? `The question you asked: "${input.trivia.q}" The correct answer: ${input.trivia.a}.` : "",
     prefs.language === "hindi" || prefs.language === "marathi" ? `Write in ${prefs.language === "hindi" ? "Hindi" : "Marathi"} using Devanagari script (song and artist names may stay in English).` : prefs.language === "hinglish" ? "Write in Hinglish, Roman script." : "Write in English.",

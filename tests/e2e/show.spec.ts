@@ -75,22 +75,21 @@ test("Next while the RJ break is still being written moves straight on", async (
   await expect.poll(() => w.plays.length, { timeout: 4000, message: "Next must not wait for the 20s break" }).toBeGreaterThan(m);
 });
 
-test("phone Spotify: next song is queued on the device, and if the page was frozen the show adopts it instead of restarting it", async ({ context, page }, ti) => {
+test("phone Spotify: next song is queued on the device, and if the page stalls at the end the show adopts it instead of restarting it", async ({ context, page }, ti) => {
   test.skip(!mob(ti.project.name), "Spotify Connect is the phone path");
   const w = await setup(context, page, { mobile: true, songMs: 8000, segmentMs: 300, ttsMs: 300 });
   await page.goto("/live"); await goLive(page, w);
-  await expect.poll(() => w.playBodies.length, { timeout: 15000 }).toBeGreaterThan(0);
   await expect.poll(() => w.playBodies.some((b) => b.length === 2), { timeout: 20000, message: "song + the next one queued" }).toBe(true);
-  // Freeze the page (iOS does this when the screen locks) right after a song starts, past the end of that song.
-  await expect.poll(() => w.player.isPlaying && w.player.queue.length === 1, { timeout: 30000 }).toBe(true);
+  await expect.poll(() => w.player.isPlaying && w.player.queue.length === 1 && w.position() < 3000, { timeout: 30000 }).toBe(true);
   const playsBefore = w.plays.length, queued = w.player.queue[0];
-  const cdp = await context.newCDPSession(page);
-  await cdp.send("Page.setWebLifecycleState", { state: "frozen" });
-  await page.waitForTimeout(9500);
+  // The page can't reach Spotify across the end of the song (iOS froze the tab, or the network stalled): Spotify moves on by itself.
+  let release!: () => void; w.gate = new Promise((r) => (release = r));
+  await page.waitForTimeout(9000);
   expect(w.state()?.item.uri, "Spotify moved on by itself").toBe(queued);
-  await cdp.send("Page.setWebLifecycleState", { state: "active" });
-  await page.waitForTimeout(4000);
+  w.gate = null; release();
+  await page.waitForTimeout(5000);
   expect(w.plays.slice(playsBefore).some((p) => p.uri === queued), "the auto-started song is not restarted").toBe(false);
-  await expect.poll(() => w.plays.length, { timeout: 25000, message: "the show carries on after it" }).toBeGreaterThan(playsBefore);
+  expect(w.state()?.item.uri, "still on the adopted song").toBe(queued);
+  await expect.poll(() => w.plays.length, { timeout: 30000, message: "the show carries on after it" }).toBeGreaterThan(playsBefore);
   expect(realErrors(w)).toEqual([]);
 });

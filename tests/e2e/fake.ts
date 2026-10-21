@@ -39,6 +39,7 @@ export class World {
   consoleErrors: string[] = [];
   player = { uri: "", startedAt: 0, pausedAt: 0, isPlaying: false, device: "", queue: [] as string[] };
   playBodies: string[][] = []; // uris of every explicit play request
+  gate: Promise<void> | null = null; // while set, the page's Spotify calls hang (a frozen or stalled page); the device keeps playing
   externalPause = false;
   clickAt = 0;
   private n = 0;
@@ -135,6 +136,7 @@ export async function setup(ctx: BrowserContext, page: Page, o: Opts) {
     const u = new URL(r.request().url()), m = r.request().method(), p = u.pathname.replace("/v1", "");
     const sdk = u.searchParams.get("sdk") === "1";
     if (!sdk) w.spotifyCalls.push(`${m} ${p}`);
+    if (w.gate) await w.gate;
     await sleep(sdk ? 30 : jitter(120, 380));
     if (!sdk && rate > 0) { rate--; return r.fulfill({ status: 429, headers: { "Retry-After": "1" }, json: { error: { status: 429 } } }); }
     if (p === "/me" && me401) { me401 = false; return r.fulfill({ status: 401, json: { error: { status: 401, message: "The access token expired" } } }); }

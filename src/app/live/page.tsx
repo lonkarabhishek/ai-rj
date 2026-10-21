@@ -934,7 +934,9 @@ function LiveInner() {
       if (!started && st.item.uri === t.uri && !st.is_playing && Date.now() - t0 > 6000 && !spotifyBackoffMs()) throw new Error("song paused itself on the device");
       if (st.item.uri !== t.uri) {
         // Only the song WE queued counts as moving on by itself; anything else was picked in the Spotify app (old behaviour: pause, carry on).
-        if (started || adopted) { if (st.is_playing && queued?.uri === st.item.uri) { advancedToRef.current = st.item.uri; connectFailRef.current = 0; return "advanced"; } break; }
+        // (Even if we never saw our own song playing: a page frozen right after the start first wakes up on the next song.)
+        if (st.is_playing && queued?.uri === st.item.uri) { advancedToRef.current = st.item.uri; connectFailRef.current = 0; return "advanced"; }
+        if (started || adopted) break;
         continue;
       }
       if (st.is_playing) started = true;
