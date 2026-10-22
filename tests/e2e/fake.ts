@@ -172,7 +172,7 @@ export async function setup(ctx: BrowserContext, page: Page, o: Opts) {
       w.searches.push(q);
       if (limit > 10) return r.fulfill({ status: 400, json: { error: { status: 400, message: "Invalid limit" } } });
       await sleep(jitter(150, 400));
-      const lang = LANG_WORDS.find(([re]) => re.test(q))?.[1] ?? "unknown";
+      const lang = SENSUAL_Q.test(q) ? "hindi" : LANG_WORDS.find(([re]) => re.test(q))?.[1] ?? "unknown"; // every sensual search is a Bollywood song or film
       const instr = /instrumental|lofi|lo-fi|piano|ambient|study|focus|classical|beats/i.test(q);
       // Focus searches still return a few vocal tracks (as Spotify does): the app must filter them out.
       // Sensual searches: half the results are sensual, half plain love songs (the app must keep only the sensual ones).
