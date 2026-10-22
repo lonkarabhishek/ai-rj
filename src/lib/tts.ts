@@ -85,7 +85,7 @@ const MOOD: Record<Mood, { rate: number; pitch: number; styles: string[]; degree
   warm: { rate: 7, pitch: 1, styles: ["friendly", "cheerful", "empathetic", "hopeful"], degree: 0.9 },
   calm: { rate: -4, pitch: -1, styles: ["calm", "gentle", "softvoice", "empathetic"], degree: 0.8 },
 };
-export const MODE_MOOD: Record<ListenMode, Mood> = { default: "cheerful", drive: "cheerful", gym: "hype", focus: "calm", romantic_m: "calm", romantic_f: "calm" };
+export const MODE_MOOD: Record<ListenMode, Mood> = { default: "cheerful", drive: "cheerful", gym: "hype", focus: "calm", romantic_m: "calm", romantic_f: "calm", romantic_s: "calm" };
 const ENERGY_SHIFT: Record<Energy, number> = { chill: -5, balanced: 0, hype: 5 };
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 
@@ -104,7 +104,7 @@ export function buildSsml(text: string, shortName: string, energy: Energy = "bal
     // MAI voices already speak slowly (they run ~40% longer than classic neural), so only a gentle slowdown there.
     const mai = /MAI-Voice/.test(shortName);
     rate = mai ? (mode === "romantic_f" ? 8 : -8) : -10;
-    pitch = mode === "romantic_m" ? -5 : -3;
+    pitch = mode === "romantic_f" ? -3 : -5; // Masculine and Sensual share the deep voice
     style = mode === "romantic_f" ? ["softvoice", "gentle", "affectionate", "calm"].find((x) => styles.includes(x)) : undefined;
     degree = 1;
   }

@@ -38,6 +38,6 @@ export async function POST(req: Request) {
   const { text: raw, answer } = splitAnswer(llm ?? templateScript(input));
   const { mood, text } = splitMood(raw.replace(/\s+/g, " "));
   const trivia = llm && segment === "trivia_q" && answer && text ? { q: text.slice(-220), a: answer } : null;
-  const defaultMood = { default: "cheerful", drive: "cheerful", gym: "hype", focus: "calm", romantic_m: "warm", romantic_f: "warm" }[body.mode ?? "default"];
+  const defaultMood = { default: "cheerful", drive: "cheerful", gym: "hype", focus: "calm", romantic_m: "warm", romantic_f: "warm", romantic_s: "warm" }[body.mode ?? "default"];
   return Response.json({ script: text, mood: mood ?? defaultMood, kind: body.kind ?? "full", mode: llm !== null ? "llm" : "template", segment: llm ? segment : "vibe", trivia, headlines: headlines.slice(0, 2) });
 }

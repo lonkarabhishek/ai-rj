@@ -1,7 +1,7 @@
 "use client";
 /* YouTube source (client): curation from his likes/playlists/imported links + sparing, cached searches; IFrame player wrapper. */
 import { classifyMood } from "./mood";
-import { isRomantic, NOT_ROMANTIC_RE, ROMANTIC_QUERIES, type ListenMode, type SongLang, type TrackInfo } from "./prefs";
+import { isRomantic, isSensual, NOT_ROMANTIC_RE, romanticQueries, type ListenMode, type SongLang, type TrackInfo } from "./prefs";
 export const POOL_KEY = "myrj.yt.pool2";
 
 export interface YtVideo { id: string; title: string; channel: string; seconds: number; image?: string; audioLang?: string; topic?: boolean; lang?: string; src?: "like" | "playlist" | "link" }
@@ -64,7 +64,7 @@ const LQ: Record<Exclude<SongLang, "any">, { q: string[]; focus: string }> = {
   tamil: { q: ["tamil hit songs", "anirudh songs"], focus: "tamil bgm instrumental" },
   telugu: { q: ["telugu hit songs", "dsp telugu songs"], focus: "telugu bgm instrumental" },
 };
-const MODEQ: Record<ListenMode, string> = { default: "", gym: "workout", drive: "road trip", focus: "", romantic_m: "", romantic_f: "" };
+const MODEQ: Record<ListenMode, string> = { default: "", gym: "workout", drive: "road trip", focus: "", romantic_m: "", romantic_f: "", romantic_s: "" };
 const INSTR = /instrumental|lofi|lo-fi|piano|flute|ambient|bgm|study|beats|guitar|sitar|santoor|violin/i;
 /** Titles that are not a single song: compilations, albums, reactions, streams, mixes, podcasts. */
 export const NOT_A_SONG = /\b(full album|full ep|album stream|compilation|jukebox|non[- ]?stop|nonstop|mashup mix|megamix|reaction|reacts?|reacting|live ?stream|livestream|live now|24\/7|podcast|interview|trailer|teaser|making of|behind the scenes|tutorial|how to|review|top \d+|best of|\d+ (hours?|hrs?)|hour(s)? (mix|of)|playlist|full movie|full video album|karaoke|ringtone)\b/i;
@@ -140,21 +140,28 @@ export class YtCurator {
   private async refillRomantic() {
     const all = await this.loadPool();
     const cand = all.filter((v) => this.ok(v)).sort(() => Math.random() - 0.5).slice(0, 40);
-    const wantQs = (n: number) => [...ROMANTIC_QUERIES].sort(() => Math.random() - 0.5).slice(0, n);
+    const sensual = isSensual(this.mode);
+    const wantQs = (n: number) => [...romanticQueries(this.mode)].sort(() => Math.random() - 0.5).slice(0, n);
     // Classify his songs and run the (capped, cached) searches at the same time, so start-up never waits twice.
-    const [moods, found] = await Promise.all([
+    const [moods0, found] = await Promise.all([
       cand.length ? classifyMood(cand.map((v) => ({ id: v.id, title: v.title, artist: v.channel })), 6000) : Promise.resolve(new Map()),
-      Promise.all(wantQs(cand.length >= 6 ? 1 : 2).map((q) => this.search(q, "hindi"))).then((x) => x.flat().filter((v) => this.ok(v))).catch(() => [] as Tagged[]),
+      Promise.all(wantQs(cand.length >= 6 ? (sensual ? 2 : 1) : 2).map((q) => this.search(q, "hindi"))).then((x) => x.flat().filter((v) => this.ok(v))).catch(() => [] as Tagged[]),
     ]);
-    const mine = cand.filter((v) => { const m = moods.get(v.id); return !!m?.romantic && (m.lang === "hindi" || m.lang === "unknown"); });
+    // Sensual: search results are tagged too (cached), so a plain love ballad that came up in a search stays out.
+    const extra = sensual ? await classifyMood(found.slice(0, 30).map((v) => ({ id: v.id, title: v.title, artist: v.channel })), 6000) : new Map();
+    const moods = new Map([...moods0, ...extra]);
+    const fits = (m?: { romantic: boolean; sensual?: boolean }) => (sensual ? !!m?.sensual : !!m?.romantic);
+    const mine = cand.filter((v) => { const m = moods.get(v.id); return fits(m) && (m.lang === "hindi" || m.lang === "unknown"); });
     const seen = new Set(mine.map((v) => v.id));
-    const pool = found.filter((v) => !seen.has(v.id) && !!seen.add(v.id)).sort(() => Math.random() - 0.5);
+    // Untagged results (classification down) still count: every sensual query names a sensual song or film.
+    const pool = found.filter((v) => (!sensual || !moods.has(v.id) || fits(moods.get(v.id))) && !seen.has(v.id) && !!seen.add(v.id)).sort(() => Math.random() - 0.5);
     const nRec = mine.length ? Math.max(1, Math.floor(mine.length / 3)) : 10;
     const recs = pool.slice(0, nRec).map((v) => ({ ...v, rec: true }));
     const out: Tagged[] = [];
     while (mine.length || recs.length) { out.push(...mine.splice(0, 3)); if (recs.length) out.push(recs.shift()!); }
     // Safe fallback: nothing classified and nothing found -> his Hindi songs (already Hindi-only and not party/remix by title), so the radio still starts.
-    if (!out.length) out.push(...cand.slice(0, 8));
+    // Sensual: untagged results first, then at least-romantic ones (never party songs), so the radio still starts.
+    if (!out.length) out.push(...(sensual ? [...found.filter((v) => !moods.has(v.id)), ...[...found, ...cand].filter((v) => moods.get(v.id)?.romantic)].slice(0, 8) : cand.slice(0, 8)));
     this.queue.push(...out.map(toTrack));
   }
 
@@ -170,7 +177,7 @@ export class YtCurator {
       .filter((a) => !this.langs.length || (a.lang ? this.langs.includes(a.lang) : this.langs.length === 1))
       .slice(0, 12).sort(() => Math.random() - 0.5).slice(0, picks.length >= 4 ? 1 : 2);
     const qs: [string, Tagged["via"]][] = artists.map((a) => [`${a.name} songs`, a.lang ?? (this.langs[0] ?? "mode")]);
-    if (rom) { for (const q of [...ROMANTIC_QUERIES].sort(() => Math.random() - 0.5).slice(0, 2)) qs.push([q, "hindi"]); }
+    if (rom) { for (const q of [...romanticQueries(this.mode)].sort(() => Math.random() - 0.5).slice(0, 2)) qs.push([q, "hindi"]); }
     else if (!qs.length && picks.length < 4) {
       const langs: SongLang[] = this.langs.length ? [...this.langs].sort(() => Math.random() - 0.5) : ["any"];
       for (const l of langs) {

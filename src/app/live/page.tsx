@@ -380,6 +380,7 @@ function LiveInner() {
       focus: { none: 0.8, stinger: 0.2, maxGap: 6 },
       romantic_m: { none: 0.55, stinger: 0.15, maxGap: 4 }, // softer, rarer: a late-night RJ speaks only when it's worth it
       romantic_f: { none: 0.55, stinger: 0.15, maxGap: 4 },
+      romantic_s: { none: 0.55, stinger: 0.15, maxGap: 4 },
     }[m];
     if (loadPrefs().justMusic) { cfg.none = Math.max(cfg.none, 0.7); cfg.maxGap = Math.max(cfg.maxGap, 4); }
     let kind: BreakKind = r < cfg.none ? "none" : r < cfg.none + cfg.stinger ? "stinger" : "full";
@@ -1354,6 +1355,7 @@ const DOCK_ICONS: Record<ListenMode, React.ReactNode> = {
   drive: <path d="M5 16V11l2-5h10l2 5v5M5 16h14M5 16v2M19 16v2M7.5 13h.01M16.5 13h.01" />,
   romantic_m: <path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 10c0 5.6-7 10-7 10Z" />,
   romantic_f: <path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 10c0 5.6-7 10-7 10Z" />,
+  romantic_s: <path d="M12 21c-3.9 0-7-2.9-7-6.6 0-3.2 2.4-5 3.6-7.9.4 1.8 1.4 3 2.6 3.6C11.6 6.7 13 4.4 15.3 3c-.4 2.6.7 4.6 2 6.2 1.1 1.4 1.7 3 1.7 4.8C19 18 15.9 21 12 21Z" />,
   focus: <path d="M4 15v-3a8 8 0 0 1 16 0v3M4 15a2 2 0 0 0 2 2h1v-5H6a2 2 0 0 0-2 2Zm16 0a2 2 0 0 1-2 2h-1v-5h1a2 2 0 0 1 2 2Z" />,
 };
 
@@ -1410,18 +1412,18 @@ function SessionPicker({ mode, onMode, p, up }: { mode: ListenMode; onMode: (m: 
       </div>
       <div>
         <p className={label}>Romantic Hindi</p>
-        <div className="grid grid-cols-2 gap-1.5" role="radiogroup" aria-label="Romantic Hindi voice">
+        <div className="grid grid-cols-3 gap-1.5" role="radiogroup" aria-label="Romantic Hindi voice">
           {ROMANTIC_MODES.map((m) => (
             <button key={m.id} role="radio" aria-checked={mode === m.id} aria-label={`${m.label} · ${m.sub}`} onClick={() => onMode(m.id)}
               className={cx("flex h-10 [@media(max-height:700px)]:h-9 items-center justify-center gap-2 rounded-2xl border px-2 text-[12px] font-medium transition active:scale-95", mode === m.id ? "border-[#f3efe8] bg-[#f3efe8] text-[#141210]" : "border-white/10 text-zinc-300 hover:border-white/25")}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="shrink-0">{DOCK_ICONS[m.id]}</svg>
-              <span className="leading-tight">{m.sub}<span className="block text-[10px] font-normal opacity-70">हिन्दी · romantic</span></span>
+              <span className="leading-tight">{m.sub}<span className="block text-[10px] font-normal opacity-70">हिन्दी · {m.id === "romantic_s" ? "sensual" : "romantic"}</span></span>
             </button>
           ))}
         </div>
       </div>
       <div><p className={label}>Music from</p><MusicSourcePicker p={p} up={up} small /></div>
-      <div><p className={label}>Songs in</p>{isRomantic(mode) ? <p className="flex h-8 items-center text-[13px] text-zinc-400" data-testid="songs-hindi-only">Hindi romantic only for this session</p> : <SongLangPicker p={p} up={up} small />}</div>
+      <div><p className={label}>Songs in</p>{isRomantic(mode) ? <p className="flex h-8 items-center text-[13px] text-zinc-400" data-testid="songs-hindi-only">{mode === "romantic_s" ? "Hindi sensual only" : "Hindi romantic only"} for this session</p> : <SongLangPicker p={p} up={up} small />}</div>
       <div><p className={label}>RJ talks about</p><TalkToggles p={p} up={up} small /></div>
     </div>
   );

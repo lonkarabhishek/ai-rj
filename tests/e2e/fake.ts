@@ -9,7 +9,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const jitter = (a: number, b: number) => a + Math.random() * (b - a);
 
 export type Lang = "hindi" | "english" | "punjabi" | "marathi" | "tamil" | "telugu" | "unknown";
-export interface FakeTrack { id: string; uri: string; name: string; lang: Lang; instrumental: boolean; durationMs: number }
+export interface FakeTrack { id: string; uri: string; name: string; lang: Lang; instrumental: boolean; durationMs: number; sensual?: boolean }
 
 export interface Faults {
   token401Once?: boolean;      // first /me answers 401: the app must refresh the token and retry
@@ -25,7 +25,8 @@ export interface Opts { mobile: boolean; prefs?: Record<string, unknown> | null;
 
 export const BASE_PREFS = { onboarded: true, rjName: "Riya", listenerName: "Abhishek", voiceId: "en-IN-NeerjaNeural", newsTopics: ["AI"] };
 
-const LANG_WORDS: [RegExp, Lang][] = [[/hindi|bollywood|filmi|arijit/i, "hindi"], [/punjabi|bhangra|desi hip hop|diljit/i, "punjabi"], [/marathi|lavani|ajay atul/i, "marathi"], [/tamil|kollywood|anirudh|ilaiyaraaja/i, "tamil"], [/telugu|tollywood/i, "telugu"], [/english|pop|indie|rock|r&b|lofi|piano|ambient/i, "english"]];
+const SENSUAL_Q = /murder|jism|hate story|intehaan|race|aashiq|baadal|emraan|sensual|seductive|\bhot\b/i;
+const LANG_WORDS: [RegExp, Lang][] = [[/hindi|bollywood|filmi|arijit|murder|jism|hate story|intehaan|race 2|aashiq|baadal|emraan|seductive/i, "hindi"], [/punjabi|bhangra|desi hip hop|diljit/i, "punjabi"], [/marathi|lavani|ajay atul/i, "marathi"], [/tamil|kollywood|anirudh|ilaiyaraaja/i, "tamil"], [/telugu|tollywood/i, "telugu"], [/english|pop|indie|rock|r&b|lofi|piano|ambient/i, "english"]];
 const SCRIPT: Partial<Record<Lang, string>> = { tamil: "பாடல்", telugu: "పాట", hindi: "गाना" };
 
 export class World {
@@ -174,7 +175,8 @@ export async function setup(ctx: BrowserContext, page: Page, o: Opts) {
       const lang = LANG_WORDS.find(([re]) => re.test(q))?.[1] ?? "unknown";
       const instr = /instrumental|lofi|lo-fi|piano|ambient|study|focus|classical|beats/i.test(q);
       // Focus searches still return a few vocal tracks (as Spotify does): the app must filter them out.
-      const items = [...Array(limit)].map((_, i) => w.json(instr ? (i % 3 === 0 ? w.track(lang) : w.track(lang, true)) : w.track(lang)));
+      // Sensual searches: half the results are sensual, half plain love songs (the app must keep only the sensual ones).
+      const items = [...Array(limit)].map((_, i) => { const t = instr ? (i % 3 === 0 ? w.track(lang) : w.track(lang, true)) : w.track(lang); if (SENSUAL_Q.test(q) && i % 2 === 0) { t.sensual = true; t.name = `Sensual ${t.name}`; } return w.json(t); });
       return r.fulfill({ json: { tracks: { items } } });
     }
     return r.fulfill({ json: {} });
@@ -203,7 +205,7 @@ export async function setup(ctx: BrowserContext, page: Page, o: Opts) {
     await sleep(jitter(150, 400));
     if (f.mood500) return r.fulfill({ status: 502, json: { labels: {} } });
     const labels: Record<string, any> = {};
-    for (const it of b.items) { const t = w.tracks.get(it.id); if (t) labels[it.id] = { lang: t.lang, romantic: !/party|dance|remix/i.test(t.name) }; }
+    for (const it of b.items) { const t = w.tracks.get(it.id); if (t) labels[it.id] = { lang: t.lang, romantic: !/party|dance|remix/i.test(t.name), sensual: !!t.sensual }; }
     r.fulfill({ json: { labels } });
   });
   await page.route("**/api/news**", async (r) => { await sleep(jitter(300, 700)); r.fulfill({ json: { headlines: [{ title: "Models get faster again, says a new benchmark today", source: "Wire" }] } }); });

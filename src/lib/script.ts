@@ -159,6 +159,7 @@ function templateInner(input: SegmentInput): string {
       focus: { en: "Focus mode. I'll keep it quiet.", hl: "Focus mode on. Main chup rahunga, aap kaam karo.", hi: "फोकस मोड। मैं चुप रहूँगा, आप काम कीजिए।", mr: "फोकस मोड. मी शांत राहतो, तुम्ही काम करा." },
       romantic_m: { en: "", hl: "", hi: "रात का सुकून, और दिल के क़रीब कुछ गाने।", mr: "" },
       romantic_f: { en: "", hl: "", hi: "चलिए, कुछ नर्म सी धुनें, कुछ दिल की बातें।", mr: "" },
+      romantic_s: { en: "", hl: "", hi: "रोशनी थोड़ी कम कीजिए, आज की रात कुछ ज़्यादा ही गर्म है।", mr: "" },
       default: { en: "Back to your mix!", hl: "Wapas aapke mix pe!", hi: "वापस आपके मिक्स पर!", mr: "परत तुमच्या मिक्सवर!" },
     };
     return L[mode][k];
@@ -178,7 +179,9 @@ function templateFull({ prefs, next, index, headlines, mode = "default", hour: i
   if (isRomantic(mode)) {
     const tl = trackLine(next), me = prefs.listenerName;
     const opener = index === 0 ? `${prefs.rjName} हाज़िर है, ${me}। ` : "";
-    const lines = mode === "romantic_m"
+    const lines = mode === "romantic_s"
+      ? ["रात गहरी है, और फ़ासले कुछ ज़्यादा ही कम, {me}।", "कुछ धुनें सुनी नहीं जातीं, महसूस की जाती हैं।", "साँसें थोड़ी धीमी, धड़कनें थोड़ी तेज़। सुनिए, {me}।", "आज की रात, थोड़ी सी बेक़रारी के नाम।"]
+      : mode === "romantic_m"
       ? ["रात ख़ामोश है, और मैं बस तुम्हारे साथ हूँ, {me}।", "कुछ बातें कहनी नहीं पड़तीं, गाने कह देते हैं।", "इश्क़ शोर नहीं करता, {me}, बस धीरे से दिल में उतर जाता है।", "आज की रात, इन सुरों के नाम।"]
       : ["रात नर्म है, और ये धुन तुम्हारे लिए, {me}।", "कभी कभी ख़ामोशी भी मोहब्बत की ज़ुबान होती है।", "धीमे धीमे, दिल से दिल तक, सुनिए {me}।", "ये गाना उसके नाम, जो आपके दिल के बहुत क़रीब है।"];
     return opener + pick(lines).replace("{me}", me) + (tl ? ` ${pick(UPNEXT.hi).replace("{t}", tl)}।` : "");
@@ -263,6 +266,7 @@ const HUMOR_RULES: Record<string, string> = {
 };
 const MODE_RULES: Record<string, string> = {
   romantic_m: "Mode: Romantic Hindi, masculine voice. A deep, calm, confident late-night RJ: slow, warm, poetic Devanagari Hindi. Shayari-style one-liners, soft dedications, an intimate hush. Romantic and sensual in tone, never explicit or crude. No news, no jokes, no hype. 1 to 3 short sentences, then a gentle segue naming the next song.",
+  romantic_s: "Mode: Romantic Hindi · Sensual, deep masculine voice, played over sensual, seductive Bollywood songs. A slow, husky, late-night RJ: teasing, flirtatious, full of heat and tension. Poetic Devanagari Hindi with innuendo and longing: closeness, breath, a touch, rain on skin, the night. Suggestive and seductive, NEVER explicit, graphic or crude: no sexual acts, no body parts beyond lips, eyes, hands and hair, nothing vulgar. No news, no jokes, no hype. 1 to 3 short sentences, then a slow, teasing segue naming the next song.",
   romantic_f: "Mode: Romantic Hindi, sultry feminine voice. A warm, intimate, sultry late-night RJ: soft, unhurried, poetic Devanagari Hindi. Shayari-style one-liners, tender dedications, a whisper-close feel. Romantic and sensual in tone, never explicit or crude. No news, no jokes, no hype. 1 to 3 short sentences, then a gentle segue naming the next song.",
   default: "Mode: My Mix. A normal break: 2 to 5 sentences. Real banter, a joke when asked, news when given, then a smooth segue into the next song.",
   drive: "Mode: Driving. Road-trip buddy energy: playful, sing-along vibes, mention the road or the drive. 2 to 4 sentences, joke when asked, news when given, then the segue.",

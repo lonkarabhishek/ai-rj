@@ -1,6 +1,6 @@
 "use client";
 import { classifyMood } from "./mood";
-import { isRomantic, NOT_ROMANTIC_RE, ROMANTIC_QUERIES, type ListenMode, type SongLang, type TrackInfo } from "./prefs";
+import { isRomantic, isSensual, NOT_ROMANTIC_RE, romanticQueries, type ListenMode, type SongLang, type TrackInfo } from "./prefs";
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -286,7 +286,7 @@ export class Curator {
     for (const l of this.langs) {
       const qs: string[] = []; per.push(qs);
       const T = LANG_TERMS[l];
-      const base = this.mode === "focus" ? T.focus : isRomantic(this.mode) && l === "hindi" ? ROMANTIC_QUERIES : T.q;
+      const base = this.mode === "focus" ? T.focus : isRomantic(this.mode) && l === "hindi" ? romanticQueries(this.mode) : T.q;
       const picks = [...base].sort(() => Math.random() - 0.5).slice(0, this.mode === "focus" ? 2 : 1);
       for (const b of picks) qs.push(`${b} ${this.mode === "focus" ? "" : flavour[Math.floor(Math.random() * flavour.length)]}`.trim());
       if (this.mode !== "focus" && !isRomantic(this.mode) && Math.random() < 0.5) qs.push(`genre:"${T.genre[Math.floor(Math.random() * T.genre.length)]}"`);
@@ -429,7 +429,7 @@ export class Curator {
       }
       return out;
     }
-    if (isRomantic(this.mode)) return this.map((await Promise.all([...ROMANTIC_QUERIES].sort(() => Math.random() - 0.5).slice(0, 3).map((q) => this.search(q)))).flat());
+    if (isRomantic(this.mode)) return this.map((await Promise.all([...romanticQueries(this.mode)].sort(() => Math.random() - 0.5).slice(0, 3).map((q) => this.search(q)))).flat());
     const qs = [...MODE_QUERIES[this.mode as "gym" | "drive"]].sort(() => Math.random() - 0.5).slice(0, 3);
     return this.map((await Promise.all(qs.map((q) => this.search(q)))).flat());
   }
@@ -453,14 +453,19 @@ export class Curator {
       // recommendation per 3 of his. The classification costs no Spotify calls, and only one language search runs when he has enough songs.
       const seen = new Set<string>();
       const own = [...(this.pools.top ?? []), ...(this.pools.saved ?? []), ...(this.pools.playlists ?? [])].filter((t) => t.uri && !NOT_ROMANTIC_RE.test(t.name) && !seen.has(t.uri) && !!seen.add(t.uri));
-      const cand = this.take(own, 40);
-      const [moods, searched] = await Promise.all([
+      const cand = this.take(own, 40), sensual = isSensual(this.mode);
+      const [moods0, searched] = await Promise.all([
         cand.length ? classifyMood(cand.map((t) => ({ id: t.uri!, title: t.name, artist: t.artists })), 6000) : Promise.resolve(new Map()),
-        this.langTracks(["", "love", "romantic"], cand.length >= 6 ? 1 : 3).catch(() => [] as TrackInfo[]),
+        this.langTracks(sensual ? [""] : ["", "love", "romantic"], cand.length >= 6 ? (sensual ? 2 : 1) : 3).catch(() => [] as TrackInfo[]),
       ]);
-      const mine = cand.filter((t) => { const m = moods.get(t.uri!); return !!m?.romantic && m.lang === "hindi"; });
+      // Sensual: search results are tagged too (cached), so a plain love ballad that came up in a search stays out; untagged ones count
+      // (classification down), since every sensual query names a sensual song or film.
+      const extra = sensual ? await classifyMood(searched.slice(0, 30).map((t) => ({ id: t.uri!, title: t.name, artist: t.artists })), 6000) : new Map();
+      const moods = new Map([...moods0, ...extra]);
+      const fits = (m?: { romantic: boolean; sensual?: boolean }) => (sensual ? !!m?.sensual : !!m?.romantic);
+      const mine = cand.filter((t) => { const m = moods.get(t.uri!); return fits(m) && m.lang === "hindi"; });
       const mineIds = new Set(mine.map((t) => t.uri));
-      const recs = this.take(searched.filter((t) => !mineIds.has(t.uri)), mine.length ? Math.max(1, Math.floor(mine.length / 3)) : 10);
+      const recs = this.take(searched.filter((t) => !mineIds.has(t.uri) && (!sensual || !moods.has(t.uri!) || fits(moods.get(t.uri!)))), mine.length ? Math.max(1, Math.floor(mine.length / 3)) : 10);
       const batch: TrackInfo[] = [];
       while (mine.length || recs.length) { batch.push(...mine.splice(0, 3)); if (recs.length) batch.push(recs.shift()!); }
       this.queue.push(...batch);
@@ -508,7 +513,8 @@ export class Curator {
     }
     if (!this.queue.length) {
       // Never block start: the language filter (or every search) came up empty, so relax it and play favourites.
-      const relaxed = isRomantic(this.mode) ? await this.byLang([...this.take(this.pools.top, 6), ...this.take(this.pools.saved, 4)], false) : [...this.take(this.pools.top, 6), ...this.take(this.pools.saved, 4), ...this.take(this.pools.seeds, 3), ...this.take(this.pools.playlists, 3)];
+      const relaxed = isSensual(this.mode) ? (await this.modeTracks().catch(() => [] as TrackInfo[])).filter((t) => !NOT_ROMANTIC_RE.test(t.name)).slice(0, 8)
+        : isRomantic(this.mode) ? await this.byLang([...this.take(this.pools.top, 6), ...this.take(this.pools.saved, 4)], false) : [...this.take(this.pools.top, 6), ...this.take(this.pools.saved, 4), ...this.take(this.pools.seeds, 3), ...this.take(this.pools.playlists, 3)];
       this.queue.push(...relaxed.sort(() => Math.random() - 0.5));
       if (relaxed.length) this.relaxed = true;
     }

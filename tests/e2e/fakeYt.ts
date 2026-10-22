@@ -1,7 +1,7 @@
 /* Fake YouTube IFrame API + our /api/youtube/* routes. Videos carry their true language for assertions. */
 import type { Page } from "@playwright/test";
 
-export interface FV { id: string; title: string; channel: string; seconds: number; audioLang?: string; lang: string; instrumental?: boolean; label?: string; romantic?: boolean }
+export interface FV { id: string; title: string; channel: string; seconds: number; audioLang?: string; lang: string; instrumental?: boolean; label?: string; romantic?: boolean; sensual?: boolean }
 export class YtWorld {
   loads: { t: number; id: string }[] = [];
   searches: string[] = [];
@@ -47,7 +47,7 @@ export async function setupYt(page: Page, o: { songSec?: number; connected?: boo
     w.moodCalls++; await new Promise((x) => setTimeout(x, 250));
     if (o.moodFail) return r.fulfill({ status: 502, json: { labels: {} } });
     const labels: Record<string, any> = {};
-    for (const it of r.request().postDataJSON().items) { const v = w.videos.get(it.id); if (v) labels[it.id] = { lang: v.lang === "other" ? "other" : v.lang, romantic: v.romantic ?? !/party|dance|remix|rap/i.test(v.title) }; }
+    for (const it of r.request().postDataJSON().items) { const v = w.videos.get(it.id); if (v) labels[it.id] = { lang: v.lang === "other" ? "other" : v.lang, romantic: v.romantic ?? !/party|dance|remix|rap/i.test(v.title), sensual: !!v.sensual }; }
     r.fulfill({ json: { labels } });
   });
   await page.route("**/api/youtube/songs?status", (r) => r.fulfill({ json: { configured: true, connected: o.connected ?? true } }));

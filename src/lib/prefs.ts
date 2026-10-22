@@ -93,7 +93,7 @@ export interface TrackInfo {
   artistIds?: string[];
 }
 
-export type ListenMode = "default" | "gym" | "drive" | "focus" | "romantic_m" | "romantic_f";
+export type ListenMode = "default" | "gym" | "drive" | "focus" | "romantic_m" | "romantic_f" | "romantic_s";
 export const MODES: { id: ListenMode; label: string; emoji: string; blurb: string; talkEvery: number; energy?: Energy }[] = [
   { id: "default", label: "My Mix", emoji: "📻", blurb: "Your favourites + discoveries", talkEvery: 1 },
   { id: "gym", label: "Gym", emoji: "🏋️", blurb: "High-energy, hype RJ", talkEvery: 1, energy: "hype" },
@@ -106,11 +106,16 @@ export const MODES: { id: ListenMode; label: string; emoji: string; blurb: strin
  * dedicated Azure voice for that session only (the saved voice setting is untouched).
  * Voices checked against the live Azure list (hi-IN): MAI-Voice-2.1-Flash Dhruv (deep male, ~90 Hz) and Priya (lowest-pitched female, supports softvoice).
  */
-export const ROMANTIC_MODES: { id: "romantic_m" | "romantic_f"; label: string; sub: string; voiceId: string; fallbackVoiceId: string; blurb: string }[] = [
+export type RomanticMode = "romantic_m" | "romantic_f" | "romantic_s";
+export const ROMANTIC_MODES: { id: RomanticMode; label: string; sub: string; voiceId: string; fallbackVoiceId: string; blurb: string }[] = [
   { id: "romantic_m", label: "Romantic Hindi", sub: "Masculine", voiceId: "azure:hi-IN-Dhruv:MAI-Voice-2.1-Flash", fallbackVoiceId: "azure:hi-IN-KunalNeural", blurb: "Deep, confident male Hindi RJ · romantic Hindi songs" },
   { id: "romantic_f", label: "Romantic Hindi", sub: "Sultry", voiceId: "azure:hi-IN-Priya:MAI-Voice-2.1-Flash", fallbackVoiceId: "azure:hi-IN-AartiNeural", blurb: "Warm, sultry female Hindi RJ · romantic Hindi songs" },
+  // Same deep voice as Masculine; only sensual, seductive Hindi songs, and a teasing RJ (suggestive, never explicit).
+  { id: "romantic_s", label: "Romantic Hindi", sub: "Sensual", voiceId: "azure:hi-IN-Dhruv:MAI-Voice-2.1-Flash", fallbackVoiceId: "azure:hi-IN-KunalNeural", blurb: "Deep male Hindi RJ, seductive · sensual Hindi songs only" },
 ];
-export const isRomantic = (m?: ListenMode | string | null): m is "romantic_m" | "romantic_f" => m === "romantic_m" || m === "romantic_f";
+export const isRomantic = (m?: ListenMode | string | null): m is RomanticMode => m === "romantic_m" || m === "romantic_f" || m === "romantic_s";
+/** Romantic Hindi · Sensual: only songs tagged sensual (not every love song). */
+export const isSensual = (m?: ListenMode | string | null) => m === "romantic_s";
 export const romanticVoice = (m?: ListenMode | string | null) => ROMANTIC_MODES.find((x) => x.id === m)?.voiceId;
 /** Display info for any mode, including the romantic presets. */
 export function modeInfo(id: ListenMode) {
@@ -128,5 +133,13 @@ export const ROMANTIC_QUERIES = [
   "shreya ghoshal romantic bollywood", "sonu nigam romantic hindi songs", "bollywood romantic ballads", "hindi ghazal love songs", "soft bollywood love songs",
   "ishq hindi songs", "hindi sad romantic arijit", "bollywood unplugged love songs", "pehla nasha hindi love", "hindi lofi-free romantic acoustic songs",
 ];
+/** Search terms for Romantic Hindi · Sensual: songs in the vein of Bheegey Honth Tere and Be Intehaan. Each says Hindi/Bollywood or names the film. */
+export const SENSUAL_QUERIES = [
+  "bheegey honth tere murder", "be intehaan race 2", "kaho na kaho murder", "zara zara touch me race", "dil sambhal ja zara murder 2",
+  "aa zara murder 2", "haal e dil murder 2", "jaadu hai nasha hai jism", "abhi abhi jism 2", "aaj phir hate story 2",
+  "tu isaq mera hate story 3", "neendein khul jaati hain hate story 3", "aashiq banaya aapne", "kabhi jo baadal barse",
+  "emraan hashmi sensual hindi songs", "bollywood sensual songs", "hot romantic bollywood songs", "seductive hindi songs",
+];
+export const romanticQueries = (m?: ListenMode | string | null) => (isSensual(m) ? SENSUAL_QUERIES : ROMANTIC_QUERIES);
 /** Titles that break the soft, late-night mood (or are not a clean song): skipped in Romantic Hindi sessions. */
 export const NOT_ROMANTIC_RE = /remix|\bdj\b|party|mashup|bass boosted|slowed|reverb|lofi|lo-fi|item song|\brap\b|\btrap\b|club|dance|workout|edm|\bhype\b/i;
