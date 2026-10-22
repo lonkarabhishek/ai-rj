@@ -325,7 +325,7 @@ export function segmentFor(input: SegmentInput): SegmentType {
 
 /** Model per break: full breaks get the stronger writer, short lines the fast one. */
 export function modelFor(input: Pick<SegmentInput, "kind" | "index" | "mode">) {
-  if (input.mode === "romantic_s") return process.env.ANTHROPIC_MODEL_SENSUAL || "claude-opus-5-5"; // Sensual: every line, the strongest writer
+  if (input.mode === "romantic_s") return process.env.ANTHROPIC_MODEL_SENSUAL || "claude-opus-4-6"; // Sensual: every line written by Opus 4.6
   const short = (input.kind === "stinger" && input.index > 0) || input.kind === "switch";
   return short ? (process.env.ANTHROPIC_MODEL || "claude-haiku-5-5") : (process.env.ANTHROPIC_MODEL_FULL || "claude-sonnet-5-5");
 }
@@ -333,6 +333,7 @@ export function modelFor(input: Pick<SegmentInput, "kind" | "index" | "mode">) {
 function anthropicBody(model: string, system: string, user: string) {
   const base = { model, max_tokens: 1024, system, messages: [{ role: "user", content: user }] };
   if (model.includes("sonnet-5-5")) return { ...base, thinking: { type: "between_tools" }, output_config: { effort: "low" }, fallbacks: "default" };
+  if (/opus-4-[0-6]\b/.test(model)) return { ...base, temperature: 1 }; // Opus 4.x: no `thinking` field means no thinking (fast)
   if (/opus|fable|mythos/.test(model)) return { ...base, output_config: { effort: "low" }, ...(model.includes("opus-5-5") ? { fallbacks: "default" } : {}) }; // thinking can't be turned off there: keep it shallow
   return { ...base, temperature: 1, thinking: { type: "disabled" } }; // speed matters more than reasoning for a short line
 }

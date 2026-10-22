@@ -46,7 +46,7 @@ Copy `.env.example` to `.env.local`. Ask the human for each value.
 | --- | --- | --- |
 | `ANTHROPIC_API_KEY` | Recommended (templates otherwise) | https://console.anthropic.com → API Keys |
 | `ANTHROPIC_MODEL` | Optional | Fast model for stingers, switch lines and the fallback; default `claude-haiku-5-5` |
-| `ANTHROPIC_MODEL_SENSUAL` | Optional | Writer for every line in Romantic Hindi · Sensual; default `claude-opus-5-5` (the most expensive of the three) |
+| `ANTHROPIC_MODEL_SENSUAL` | Optional | Writer for every line in Romantic Hindi · Sensual; default `claude-opus-4-6` |
 | `ANTHROPIC_MODEL_FULL` | Optional | Writer for full breaks and show segments; default `claude-sonnet-5-5` (costs more than Haiku; set it to the Haiku id to keep costs down) |
 | `AZURE_SPEECH_KEY` | Recommended (browser voice otherwise) | Azure Portal → Speech service → Keys and Endpoint |
 | `AZURE_SPEECH_REGION` | With the Azure key (default `centralindia`) | Same page, "Location/Region" |
