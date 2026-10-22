@@ -90,7 +90,7 @@ test("Romantic Hindi: Hindi prompt, Devanagari template lines, no news or jokes;
 });
 
 test("Romantic Hindi voices: SSML uses the right voice, slow/low prosody, style only if supported", () => {
-  expect(ROMANTIC_MODES.map((m) => m.voiceId)).toEqual(OPTS.map((o) => o.voice));
+  expect(OPTS.map((o) => ROMANTIC_MODES.find((m) => m.id === o.mode)?.voiceId)).toEqual(OPTS.map((o) => o.voice)); // Sensual is covered in sensual.spec.ts
   const m = buildSsml("नमस्ते", "hi-IN-Dhruv:MAI-Voice-2.1-Flash", "chill", "romantic_m", ["softvoice", "whispering"]);
   expect(m).toContain('<voice name="hi-IN-Dhruv:MAI-Voice-2.1-Flash">'); expect(m).toContain('xml:lang="hi-IN"'); expect(m).toMatch(/pitch="-5%"/); expect(m).toMatch(/rate="-8%"/); expect(m).not.toContain("express-as");
   const f = buildSsml("नमस्ते", "hi-IN-Priya:MAI-Voice-2.1-Flash", "chill", "romantic_f", ["softvoice", "whispering"]);
