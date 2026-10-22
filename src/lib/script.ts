@@ -23,8 +23,8 @@ export interface SegmentInput {
 }
 
 /** Recurring show bits for full breaks. "vibe" is the plain break. */
-export type SegmentType = "vibe" | "story" | "trivia_q" | "trivia_a" | "hot_take" | "callback" | "dedication";
-export const SEGMENTS: SegmentType[] = ["vibe", "story", "trivia_q", "trivia_a", "hot_take", "callback", "dedication"];
+export type SegmentType = "vibe" | "story" | "trivia_q" | "trivia_a" | "hot_take" | "callback" | "dedication" | "sensual_story";
+export const SEGMENTS: SegmentType[] = ["vibe", "story", "trivia_q", "trivia_a", "hot_take", "callback", "dedication", "sensual_story"];
 const SEGMENT_RULES: Record<SegmentType, string> = {
   vibe: "Segment: a classic break. React to the song that just played or the moment (time of day, mood, the mode), then segue.",
   story: "Segment: THE STORY. Tell one real, specific story behind the next song or its artist (how it was made, the film or album it came from, the composer, the era, a famous moment). Only facts you are confident are true; if you are not sure of any specific fact, talk about why the song hits instead. Make it sound like a secret you're letting them in on.",
@@ -32,6 +32,7 @@ const SEGMENT_RULES: Record<SegmentType, string> = {
   trivia_a: "Segment: TRIVIA ANSWER. You asked a trivia question before the last song. Reveal the answer with a little drama first (\"toh jawab hai...\"), react playfully, then segue into the next song.",
   hot_take: "Segment: HOT TAKE. Give one playful, opinionated take on the song that just played or the next one (best line, best beat drop, rate it out of ten, a bold comparison). Confident, funny, never mean about real people.",
   callback: "Segment: CALLBACK. Connect this moment to songs played earlier in this session (listed above): spot a pattern, a mood arc, an artist coming back, or joke about the journey so far. Make the listener feel the show has been listening to them.",
+  sensual_story: "Segment: A SHORT SENSUAL STORY (Romantic Hindi · Sensual only). This break replaces the usual 1 to 3 sentences: tell a complete little story of 70 to 140 words (30 to 60 seconds spoken slowly) in Devanagari Hindi, in your husky late-night voice. Two people, one charged moment: a monsoon night, the last local train, a power cut, a rooftop, a slow dance, strangers whose eyes keep meeting. Build tension with small details (rain on skin, a glance held too long, fingers brushing, a whisper, a breath close to the ear). Sensual and seductive, NEVER explicit: no sex acts, no nudity, nothing graphic or crude; fade out at the moment of a kiss or a closing door and let the listener imagine the rest. Fresh setting and characters each time (check your recent breaks). Then one short, slow line that leads into the next song by name.",
   dedication: "Segment: DEDICATION. Dedicate the next song, FM style, to a relatable group or moment (everyone stuck in traffic, the one friend who always sends reels at 2 am, whoever is missing someone tonight). Warm and specific, never about a real named private person.",
 };
 
@@ -175,9 +176,16 @@ function templateInner(input: SegmentInput): string {
   }
   return templateFull(input);
 }
-function templateFull({ prefs, next, index, headlines, mode = "default", hour: input_hour, withJoke }: SegmentInput): string {
+/** Fallback stories for Romantic Hindi · Sensual when Claude is unavailable (~30-40s each, suggestive, never explicit). */
+const SENSUAL_STORIES = [
+  "बाहर बारिश थी, और कमरे में बस एक धीमी सी रोशनी। वो खिड़की के पास खड़ी थी, भीगे बालों से पानी की बूँदें गिर रही थीं। उसने पलटकर देखा, कुछ कहा नहीं। कभी कभी ख़ामोशी सबसे ज़्यादा बोलती है। वो धीरे से पास आया, इतना पास कि साँसों की आवाज़ भी सुनाई दे। उसकी उँगलियों ने उसका हाथ छुआ, और रात ने बाक़ी कहानी अपने पास रख ली।",
+  "आख़िरी लोकल छूट चुकी थी, प्लेटफ़ॉर्म पर बस वो दोनों। अजनबी थे, पर नज़रें बार बार मिल रही थीं। उसने अपनी छतरी आगे बढ़ाई, साथ चलें? बारिश तेज़ थी और छतरी छोटी। कंधे छू गए, फिर हाथ। किसी ने कुछ नहीं कहा, पर दोनों जानते थे, ये रात इतनी आसानी से ख़त्म नहीं होगी।",
+  "बिजली चली गई थी। पूरी बिल्डिंग में अँधेरा, और छत पर बस चाँद। वो दोनों मुंडेर से टिके, एक दूसरे की धड़कन सुन रहे थे। हवा में मिट्टी की ख़ुशबू थी। उसने धीरे से उसके कान के पास कुछ कहा, और वो मुस्कुरा दी। फिर लाइट आ गई, पर उन्होंने आँखें नहीं खोलीं।",
+];
+function templateFull({ prefs, next, index, headlines, mode = "default", hour: input_hour, withJoke, segment }: SegmentInput): string {
   if (isRomantic(mode)) {
     const tl = trackLine(next), me = prefs.listenerName;
+    if (mode === "romantic_s" && segment === "sensual_story") return pick(SENSUAL_STORIES) + (tl ? ` ${pick(UPNEXT.hi).replace("{t}", tl)}।` : "");
     const opener = index === 0 ? `${prefs.rjName} हाज़िर है, ${me}। ` : "";
     const lines = mode === "romantic_s"
       ? ["रात गहरी है, और फ़ासले कुछ ज़्यादा ही कम, {me}।", "कुछ धुनें सुनी नहीं जातीं, महसूस की जाती हैं।", "साँसें थोड़ी धीमी, धड़कनें थोड़ी तेज़। सुनिए, {me}।", "आज की रात, थोड़ी सी बेक़रारी के नाम।"]
@@ -315,6 +323,7 @@ export function splitAnswer(t: string): { text: string; answer?: string } {
 export function segmentFor(input: SegmentInput): SegmentType {
   const s = input.segment && SEGMENTS.includes(input.segment) ? input.segment : "vibe";
   const mode = input.mode ?? "default";
+  if (s === "sensual_story") return mode === "romantic_s" && (input.kind === "full" || input.kind === undefined) && input.index > 0 ? s : "vibe";
   if ((input.kind !== "full" && input.kind !== undefined) || input.index === 0 || isRomantic(mode) || mode === "gym" || mode === "focus") return "vibe";
   const facts = input.prefs.talk?.facts !== false && !input.prefs.justMusic;
   if ((s === "story" || s === "trivia_q") && !facts) return "vibe";
@@ -325,13 +334,13 @@ export function segmentFor(input: SegmentInput): SegmentType {
 
 /** Model per break: full breaks get the stronger writer, short lines the fast one. */
 export function modelFor(input: Pick<SegmentInput, "kind" | "index" | "mode">) {
-  if (input.mode === "romantic_s") return process.env.ANTHROPIC_MODEL_SENSUAL || "claude-opus-4-6"; // Sensual: every line written by Opus 4.6
+  if (input.mode === "romantic_s") return process.env.ANTHROPIC_MODEL_SENSUAL || "claude-sonnet-5-5"; // Sensual: every line (and its stories) by Sonnet
   const short = (input.kind === "stinger" && input.index > 0) || input.kind === "switch";
   return short ? (process.env.ANTHROPIC_MODEL || "claude-haiku-5-5") : (process.env.ANTHROPIC_MODEL_FULL || "claude-sonnet-5-5");
 }
 /** Request body per model family: Sonnet 5.5 / Opus 5.5 reject disabled thinking and custom sampling; Haiku keeps the fast settings. */
 function anthropicBody(model: string, system: string, user: string) {
-  const base = { model, max_tokens: 1024, system, messages: [{ role: "user", content: user }] };
+  const base = { model, max_tokens: 2048, system, messages: [{ role: "user", content: user }] };
   if (model.includes("sonnet-5-5")) return { ...base, thinking: { type: "between_tools" }, output_config: { effort: "low" }, fallbacks: "default" };
   if (/opus-4-[0-6]\b/.test(model)) return { ...base, temperature: 1 }; // Opus 4.x: no `thinking` field means no thinking (fast)
   if (/opus|fable|mythos/.test(model)) return { ...base, output_config: { effort: "low" }, ...(model.includes("opus-5-5") ? { fallbacks: "default" } : {}) }; // thinking can't be turned off there: keep it shallow
@@ -369,8 +378,9 @@ export async function llmScript(input: SegmentInput): Promise<string | null> {
     played.length > 1 && !stinger && !isSwitch ? `Played so far this session (oldest first): ${played.join("; ")}.` : "",
     isSwitch ? `The listener just switched to ${mode === "default" ? "My Mix" : rom ? "Romantic Hindi" : mode} mode. Say ONE short, fitting transition line (under 12 words) that acknowledges the switch with the new energy, then nothing else. Do not SKIP.` :
     stinger ? "This is a STINGER: ONE short line (under 15 words) said over the song's intro: a quick fact, a reaction or the vibe of the next song. If you truly have nothing, reply SKIP." :
+      seg === "sensual_story" ? "This is a STORY break between two songs: the story (70 to 140 words), then one line naming the next song. Do not SKIP." :
       `This is a full break, spoken over the end of one song and the start of the next: 2 to 5 sentences, under ${seg === "story" || seg === "trivia_a" ? 90 : 70} words total.${rom || mode === "focus" ? " If you truly have nothing worth saying, reply SKIP." : " Do not SKIP."}`,
-    !stinger && !isSwitch && !rom && seg !== "vibe" ? SEGMENT_RULES[seg] : "",
+    !stinger && !isSwitch && seg !== "vibe" ? SEGMENT_RULES[seg] : "", // segmentFor() already keeps romantic modes to their own bits
     seg === "trivia_a" && input.trivia ? `The question you asked: "${input.trivia.q}" The correct answer: ${input.trivia.a}.` : "",
     prefs.language === "hindi" || prefs.language === "marathi" ? `Write in ${prefs.language === "hindi" ? "Hindi" : "Marathi"} using Devanagari script (song and artist names may stay in English).` : prefs.language === "hinglish" ? "Write in Hinglish, Roman script." : "Write in English.",
     wantNews ? `Headlines to weave in (pick one or two): ${headlines.slice(0, 3).map((x) => x.title).join(" | ")}` : "No news in this break.",
@@ -387,13 +397,14 @@ export async function llmScript(input: SegmentInput): Promise<string | null> {
     // Full breaks: the stronger model first, then the fast one if it fails or is slow (breaks are prefetched during the song).
     const primary = modelFor(input), fast = process.env.ANTHROPIC_MODEL || "claude-haiku-5-5";
     const chain = primary === fast ? [primary] : [primary, fast];
-    const budget = Number(process.env.LLM_TIMEOUT_MS ?? (chain.length > 1 ? 16000 : 8000)), t0 = Date.now();
+    const long = seg === "sensual_story"; // a 30-60s story takes longer to write (it is prefetched during the song)
+    const budget = Number(process.env.LLM_TIMEOUT_MS ?? (long ? 22000 : chain.length > 1 ? 16000 : 8000)), t0 = Date.now();
     for (const [i, model] of chain.entries()) {
       const left = budget - (Date.now() - t0);
       if (left < 2500) break;
       try {
         const res = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST", signal: AbortSignal.timeout(i === 0 && chain.length > 1 ? Math.min(left - 3000, 12000) : left),
+          method: "POST", signal: AbortSignal.timeout(i === 0 && chain.length > 1 ? Math.min(left - 3000, long ? 18000 : 12000) : left),
           headers: anthropicHeaders(anthropicKey, model),
           body: JSON.stringify(anthropicBody(model, systemPrompt(prefs, mode), user)),
         });

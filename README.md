@@ -87,7 +87,7 @@ All variables are listed with comments in [`.env.example`](.env.example).
 
 ### Anthropic
 1. Create a key at https://console.anthropic.com.
-2. Set `ANTHROPIC_API_KEY`. Full breaks and show segments (stories, trivia, hot takes, callbacks, dedications) are written by Claude Sonnet 5.5 (`ANTHROPIC_MODEL_FULL` to change it), with Claude Haiku 5.5 as the fallback; short stingers and mode-switch lines use Haiku (`ANTHROPIC_MODEL` to change it). Romantic Hindi · Sensual uses Claude Opus 4.6 for every line (`ANTHROPIC_MODEL_SENSUAL`).
+2. Set `ANTHROPIC_API_KEY`. Full breaks and show segments (stories, trivia, hot takes, callbacks, dedications) are written by Claude Sonnet 5.5 (`ANTHROPIC_MODEL_FULL` to change it), with Claude Haiku 5.5 as the fallback; short stingers and mode-switch lines use Haiku (`ANTHROPIC_MODEL` to change it). Romantic Hindi · Sensual uses Sonnet for every line, including a short sensual story every 2-3 songs (`ANTHROPIC_MODEL_SENSUAL`).
 
 ### Azure Speech (voice)
 1. In the Azure Portal create a **Speech service** (the free F0 tier gives roughly 500k characters a month at the time of writing; check current pricing).

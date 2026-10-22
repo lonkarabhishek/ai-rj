@@ -35,7 +35,7 @@ export async function POST(req: Request) {
   const segment = segmentFor(input);
   const llm = await llmScript({ ...input, segment });
   // A trivia question carries its answer on a hidden last line: keep it for the next break, never speak it.
-  const { text: raw, answer } = splitAnswer(llm ?? templateScript(input));
+  const { text: raw, answer } = splitAnswer(llm ?? templateScript({ ...input, segment }));
   const { mood, text } = splitMood(raw.replace(/\s+/g, " "));
   const trivia = llm && segment === "trivia_q" && answer && text ? { q: text.slice(-220), a: answer } : null;
   const defaultMood = { default: "cheerful", drive: "cheerful", gym: "hype", focus: "calm", romantic_m: "warm", romantic_f: "warm", romantic_s: "warm" }[body.mode ?? "default"];

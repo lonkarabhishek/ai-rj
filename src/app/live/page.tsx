@@ -20,11 +20,11 @@ type AnyCurator = { next(): Promise<TrackInfo | null>; peek(): TrackInfo | null 
 type Phase = "idle" | "tuning" | "rj" | "song" | "waiting" | "recovering";
 interface Diag { account?: string; product?: string; scopes?: string; sdk?: string; device?: string; output?: string; error?: string; timings?: string; breaks?: string; voice?: string; script?: string; audio?: string; log?: string[] }
 type BreakKind = "none" | "stinger" | "full" | "switch";
-type SegType = "vibe" | "story" | "trivia_q" | "trivia_a" | "hot_take" | "callback" | "dedication";
+type SegType = "vibe" | "story" | "trivia_q" | "trivia_a" | "hot_take" | "callback" | "dedication" | "sensual_story";
 interface Plan { kind: BreakKind; withNews?: boolean; withJoke?: boolean; segment?: SegType }
 // Show bits for full breaks, rotated so the same one never runs twice in a row (trivia answers are scheduled, not drawn).
 const SEG_BAG: SegType[] = ["story", "vibe", "hot_take", "trivia_q", "callback", "dedication", "story", "vibe"];
-interface Segment { script: string; audioUrl: string | null; lang: string; kind: BreakKind; dur?: number } // dur: voice clip length in seconds
+interface Segment { script: string; audioUrl: string | null; lang: string; kind: BreakKind; dur?: number; story?: boolean } // dur: voice clip length in seconds; story: a 30-60s sensual story (gets the gap to itself)
 
 const NEEDED = ["streaming", "user-modify-playback-state", "user-read-playback-state"];
 const SONG_VOL = 0.85;
@@ -112,6 +112,7 @@ function LiveInner() {
   const triviaRef = useRef<{ q: string; a: string } | null>(null);
   const lastSegRef = useRef<SegType[]>([]);
   const onAirAtRef = useRef(0);
+  const sinceStoryRef = useRef(0), storyGapRef = useRef(2); // Sensual: a short story every 2-3 songs
   const diagRef = useRef<Diag>({ log: [] });
   const wakeRef = useRef<any>(null);
   const chanRef = useRef<BroadcastChannel | null>(null);
@@ -357,7 +358,7 @@ function LiveInner() {
 
   function changeMode(m: ListenMode) {
     if (m === modeRef.current) return;
-    setListenMode(m); modeRef.current = m; triviaRef.current = null; // an owed answer doesn't survive a vibe change
+    setListenMode(m); modeRef.current = m; triviaRef.current = null; sinceStoryRef.current = 0; // an owed answer doesn't survive a vibe change
     if (phaseRef.current !== "idle") {
       if (outRef.current !== "none") curatorRef.current = mkCurator(m);
       switchRef.current = m;
@@ -371,6 +372,11 @@ function LiveInner() {
   function planBreak(i: number): Plan {
     if (i === 0) { const tp = loadPrefs(), on = !tp.justMusic; return { kind: "full", withNews: on && tp.talk.news, withJoke: on && tp.talk.jokes }; }
     const m = modeRef.current, since = ++sinceTalkRef.current;
+    // Romantic Hindi · Sensual: a 30-60s sensual story every 2 or 3 songs (randomly), told between songs.
+    if (m === "romantic_s" && !loadPrefs().justMusic && ++sinceStoryRef.current >= storyGapRef.current) {
+      sinceStoryRef.current = 0; storyGapRef.current = 2 + Math.floor(Math.random() * 2); sinceTalkRef.current = 0;
+      return { kind: "full", segment: "sensual_story" };
+    }
     const r = Math.random();
     // A real FM show talks at most junctions; silence is the exception (a trivia answer owed is never skipped).
     const cfg = {
@@ -637,7 +643,7 @@ function LiveInner() {
       recentRef.current.push(seg.script);
       if (plan.withNews && seg.headlines?.length) lastNewsRef.current = Date.now();
       const lang = { english: "en-IN", hinglish: "hi-IN", hindi: "hi-IN", marathi: "mr-IN" }[p.language];
-      if (ttsQuotaRef.current) { log("ElevenLabs credits used up: browser voice"); return { script: seg.script, audioUrl: null, lang, kind: plan.kind }; }
+      if (ttsQuotaRef.current) { log("ElevenLabs credits used up: browser voice"); return { script: seg.script, audioUrl: null, lang, kind: plan.kind, story: plan.segment === "sensual_story" }; }
       try {
         const tts = () => withTimeout(fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: seg.script, voiceId: p.voiceId, energy: p.energy, mode: modeRef.current, language: p.language, mood: seg.mood }) }), 20000, "voice");
         // One retry on a transient failure (network blip, 5xx) before dropping to the robotic browser voice.
@@ -654,8 +660,8 @@ function LiveInner() {
         if (!blob.size || !/audio/.test(blob.type)) throw new Error(`voice returned ${blob.type || "nothing"} (${blob.size}B)`);
         setDiag({ voice: `${prov ?? "ok"} ${Math.round(blob.size / 1024)}KB${fb ? ` (fallback after ${fb})` : ""}` });
         const url = URL.createObjectURL(blob);
-        return { script: seg.script, audioUrl: url, lang, kind: plan.kind, dur: await clipSeconds(url, seg.script) };
-      } catch (e) { log(`RJ voice failed, using browser voice: ${e}`); setDiag({ voice: `failed: ${String(e).slice(0, 160)}` }); return { script: seg.script, audioUrl: null, lang, kind: plan.kind }; }
+        return { script: seg.script, audioUrl: url, lang, kind: plan.kind, story: plan.segment === "sensual_story", dur: await clipSeconds(url, seg.script) };
+      } catch (e) { log(`RJ voice failed, using browser voice: ${e}`); setDiag({ voice: `failed: ${String(e).slice(0, 160)}` }); return { script: seg.script, audioUrl: null, lang, kind: plan.kind, story: plan.segment === "sensual_story" }; }
     } catch (e) { log(`RJ script failed: ${e}`); setDiag({ script: `failed: ${String(e).slice(0, 160)}` }); return null; }
   }
 
@@ -812,7 +818,7 @@ function LiveInner() {
       const left = st.duration ? st.duration - st.position : Infinity;
       if (!st.paused) volumeGuard(fading, tStart);
       // RJ over the outro, timed from the clip's length so the voice straddles both songs (switch lines wait for the gap)
-      if (!usedOutro && !talkingRef.current && ready?.audioUrl && ready.kind !== "switch" && left <= outroLeadMs(ready) && left > 3000) {
+      if (!usedOutro && !talkingRef.current && ready?.audioUrl && ready.kind !== "switch" && !ready.story && left <= outroLeadMs(ready) && left > 3000) {
         usedOutro = true; talkOver(ready);
       }
       if (talkingRef.current) { if (left <= 700) break; continue; } // keep the bed of music under the voice until the very end
@@ -888,7 +894,7 @@ function LiveInner() {
       setStatus("");
       if (dur) setProgress(pos / dur);
       const left = dur ? (dur - pos) * 1000 : Infinity;
-      if (!usedOutro && !talkingRef.current && ready?.audioUrl && ready.kind !== "switch" && canDuck() && left <= outroLeadMs(ready) && left > 3000) { usedOutro = true; talkOver(ready); }
+      if (!usedOutro && !talkingRef.current && ready?.audioUrl && ready.kind !== "switch" && !ready.story && canDuck() && left <= outroLeadMs(ready) && left > 3000) { usedOutro = true; talkOver(ready); }
       if (talkingRef.current) { if (left <= 700) break; continue; }
       if (!fading && left <= 1900 && canDuck()) { fading = true; fadeSdk(0.12, 1500); if (!outro) jingle(); }
       if (left <= 350) break;
@@ -1037,7 +1043,7 @@ function LiveInner() {
     let firstDone = false;
     firstP.then((t) => { firstDone = true; if (alive(sid) && phaseRef.current === "tuning") setUpNext(t); });
     sinceTalkRef.current = 0; sinceJokeRef.current = 1; lastNewsRef.current = 0; switchRef.current = null;
-    historyRef.current = []; triviaRef.current = null; lastSegRef.current = []; onAirAtRef.current = Date.now();
+    historyRef.current = []; triviaRef.current = null; lastSegRef.current = []; onAirAtRef.current = Date.now(); sinceStoryRef.current = 0; storyGapRef.current = 2;
     let introP = timed("rj intro", firstP.then((t) => buildSegment(effPrefs(), t, null, 0, planBreak(0))));
     const outP = timed(wantYt ? "youtube" : "spotify", wantYt ? setupYoutube() : setupSpotify(sid));
     outRef.current = await outP;
@@ -1120,7 +1126,7 @@ function LiveInner() {
           if (seg) {
             // When we control the volume, the RJ rides over the next song's intro (FM style) instead of stopping the music.
             // Show openers and mode-switch lines keep the stage to themselves.
-            if ((seg.kind === "stinger" || (seg.kind === "full" && prev)) && seg.audioUrl && canDuck() && next) over = seg;
+            if ((seg.kind === "stinger" || (seg.kind === "full" && prev)) && !seg.story && seg.audioUrl && canDuck() && next) over = seg;
             else await speak(seg);
           }
         }

@@ -18,13 +18,17 @@ test("show bits: hidden trivia answers, segment fallbacks and model choice", () 
   expect(segmentFor(base({ segment: "dedication", mode: "romantic_m" }))).toBe("vibe");
   expect(segmentFor(base({ segment: "story", kind: "stinger" }))).toBe("vibe");
   expect(segmentFor(base({ segment: "story", index: 0 }))).toBe("vibe"); // the opener is its own thing
+  expect(segmentFor(base({ segment: "sensual_story", mode: "romantic_s" }))).toBe("sensual_story");
+  expect(segmentFor(base({ segment: "sensual_story", mode: "romantic_m" }))).toBe("vibe"); // Sensual only
+  expect(segmentFor(base({ segment: "sensual_story", mode: "default" }))).toBe("vibe");
+  expect(segmentFor(base({ segment: "sensual_story", mode: "romantic_s", kind: "stinger" }))).toBe("vibe");
   const env = { m: process.env.ANTHROPIC_MODEL, f: process.env.ANTHROPIC_MODEL_FULL, s: process.env.ANTHROPIC_MODEL_SENSUAL };
   delete process.env.ANTHROPIC_MODEL; delete process.env.ANTHROPIC_MODEL_FULL; delete process.env.ANTHROPIC_MODEL_SENSUAL;
   expect(modelFor({ kind: "full", index: 2 })).toBe("claude-sonnet-5-5");
   expect(modelFor({ kind: "full", index: 0 })).toBe("claude-sonnet-5-5");
   expect(modelFor({ kind: "stinger", index: 2 })).toBe("claude-haiku-5-5");
   expect(modelFor({ kind: "switch", index: 2 })).toBe("claude-haiku-5-5");
-  for (const kind of ["full", "stinger", "switch"] as const) expect(modelFor({ kind, index: 2, mode: "romantic_s" }), `Sensual ${kind}`).toBe("claude-opus-4-6");
+  for (const kind of ["full", "stinger", "switch"] as const) expect(modelFor({ kind, index: 2, mode: "romantic_s" }), `Sensual ${kind}`).toBe("claude-sonnet-5-5");
   expect(modelFor({ kind: "full", index: 2, mode: "romantic_m" })).toBe("claude-sonnet-5-5"); // only Sensual moves to Opus
   expect(modelFor({ kind: "stinger", index: 2, mode: "romantic_m" })).toBe("claude-haiku-5-5");
   Object.assign(process.env, env.m ? { ANTHROPIC_MODEL: env.m } : {}, env.f ? { ANTHROPIC_MODEL_FULL: env.f } : {}, env.s ? { ANTHROPIC_MODEL_SENSUAL: env.s } : {});
