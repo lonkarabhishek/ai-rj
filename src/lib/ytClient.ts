@@ -1,7 +1,7 @@
 "use client";
 /* YouTube source (client): curation from his likes/playlists/imported links + sparing, cached searches; IFrame player wrapper. */
 import { classifyMood } from "./mood";
-import { isRomantic, isSensual, NOT_ROMANTIC_RE, romanticQueries, type ListenMode, type SongLang, type TrackInfo } from "./prefs";
+import { isOriginal, isRomantic, isSensual, NOT_ROMANTIC_RE, romanticQueries, type ListenMode, type SongLang, type TrackInfo } from "./prefs";
 export const POOL_KEY = "myrj.yt.pool2";
 
 export interface YtVideo { id: string; title: string; channel: string; seconds: number; image?: string; audioLang?: string; topic?: boolean; lang?: string; src?: "like" | "playlist" | "link" }
@@ -132,6 +132,7 @@ export class YtCurator {
     if (this.bad.has(v.id) || this.played.has(`yt:${v.id}`) || this.queue.some((q) => q.ytId === v.id)) return false;
     if (this.mode === "focus") return INSTR.test(v.title) && !VOCALY.test(v.title) && matchesLangsFocus(v, this.langs);
     if (v.seconds > 600) return false;
+    if (!isOriginal(v.title)) return false; // originals only: no remixes, lofi/slowed edits, covers, reprises...
     if (isRomantic(this.mode) && NOT_ROMANTIC_RE.test(`${v.title}`)) return false;
     return matchesLangs(v, this.langs);
   }

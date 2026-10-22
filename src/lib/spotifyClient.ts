@@ -1,6 +1,6 @@
 "use client";
 import { classifyMood } from "./mood";
-import { isRomantic, isSensual, NOT_ROMANTIC_RE, romanticQueries, type ListenMode, type SongLang, type TrackInfo } from "./prefs";
+import { isOriginal, isRomantic, isSensual, NOT_ROMANTIC_RE, romanticQueries, type ListenMode, type SongLang, type TrackInfo } from "./prefs";
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -309,7 +309,8 @@ export class Curator {
   private async safe(fn: () => Promise<TrackInfo[]>) {
     try { return await fn(); } catch { return []; }
   }
-  private map(items: any[]) { return items.map(toTrack).filter(Boolean) as TrackInfo[]; }
+  /** Spotify items to tracks. Outside Focus, only original recordings (no remixes, lofi/slowed edits, covers, reprises...). */
+  private map(items: any[]) { return (items.map(toTrack).filter(Boolean) as TrackInfo[]).filter((t) => this.mode === "focus" || isOriginal(t.name)); }
   private searchBudget = 6; // searches per queue build (language/mode searches)
   private discBudget = 3;   // discovery searches per queue build, kept separate so they never starve the language searches
   private async search(q: string, _limit = 10, maxOffset = 60, disc = false): Promise<any[]> {
@@ -518,6 +519,8 @@ export class Curator {
       this.queue.push(...relaxed.sort(() => Math.random() - 0.5));
       if (relaxed.length) this.relaxed = true;
     }
+    // Originals first (covers favourites cached before the filter existed); a remix only plays if it is the only thing left.
+    if (this.mode !== "focus") { const orig = this.queue.filter((x) => isOriginal(x.name)); if (orig.length) this.queue = orig; }
     const t = this.queue.shift() ?? null;
     if (t?.uri) this.played.add(t.uri);
     return t;

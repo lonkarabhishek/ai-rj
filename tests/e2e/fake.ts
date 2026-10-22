@@ -176,7 +176,7 @@ export async function setup(ctx: BrowserContext, page: Page, o: Opts) {
       const instr = /instrumental|lofi|lo-fi|piano|ambient|study|focus|classical|beats/i.test(q);
       // Focus searches still return a few vocal tracks (as Spotify does): the app must filter them out.
       // Sensual searches: half the results are sensual, half plain love songs (the app must keep only the sensual ones).
-      const items = [...Array(limit)].map((_, i) => { const t = instr ? (i % 3 === 0 ? w.track(lang) : w.track(lang, true)) : w.track(lang); if (SENSUAL_Q.test(q) && i % 2 === 0) { t.sensual = true; t.name = `Sensual ${t.name}`; } return w.json(t); });
+      const items = [...Array(limit)].map((_, i) => { const t = instr ? (i % 3 === 0 ? w.track(lang) : w.track(lang, true)) : w.track(lang); if (SENSUAL_Q.test(q) && i % 2 === 0) { t.sensual = true; t.name = `Sensual ${t.name}`; } if (!t.instrumental && i % 5 === 4) t.name = `${t.name} (Remix)`; return w.json(t); }); // like real search: some remixes in the mix
       return r.fulfill({ json: { tracks: { items } } });
     }
     return r.fulfill({ json: {} });

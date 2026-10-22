@@ -131,7 +131,7 @@ export const effectiveSongLangs = (m: ListenMode, langs: SongLang[]): SongLang[]
 export const ROMANTIC_QUERIES = [
   "hindi romantic songs", "bollywood love songs", "arijit singh romantic hindi", "atif aslam romantic hindi songs", "jubin nautiyal love songs hindi",
   "shreya ghoshal romantic bollywood", "sonu nigam romantic hindi songs", "bollywood romantic ballads", "hindi ghazal love songs", "soft bollywood love songs",
-  "ishq hindi songs", "hindi sad romantic arijit", "bollywood unplugged love songs", "pehla nasha hindi love", "hindi lofi-free romantic acoustic songs",
+  "ishq hindi songs", "hindi sad romantic arijit", "90s bollywood love songs", "pehla nasha hindi love", "hindi romantic melodies",
 ];
 /** Search terms for Romantic Hindi · Sensual: songs in the vein of Bheegey Honth Tere and Be Intehaan. Each says Hindi/Bollywood or names the film. */
 export const SENSUAL_QUERIES = [
@@ -141,5 +141,9 @@ export const SENSUAL_QUERIES = [
   "emraan hashmi sensual hindi songs", "bollywood sensual songs", "hot romantic bollywood songs", "seductive hindi songs",
 ];
 export const romanticQueries = (m?: ListenMode | string | null) => (isSensual(m) ? SENSUAL_QUERIES : ROMANTIC_QUERIES);
+/** Not the original recording: remixes, lofi/slowed edits, covers, reprises, unplugged/alternate versions, karaoke... Every mode but Focus
+ *  skips these (Focus wants instrumentals and lofi). "DJ" is left out on purpose: "DJ Waley Babu" is an original. */
+export const NOT_ORIGINAL_RE = /\b(re-?mix(ed)?|mash-?up|lo-?fi|slowed|reverb|sped[ -]?up|speed[ -]?up|nightcore|8d(\s*audio)?|bass[ -]?boosted|cover|reprise|unplugged|karaoke|jhankar|rework|bootleg|recreat(ed|ion)|remake)\b|\b(acoustic|female|male|sad|lofi|instrumental) version\b/i;
+export const isOriginal = (title: string) => !NOT_ORIGINAL_RE.test(title);
 /** Titles that break the soft, late-night mood (or are not a clean song): skipped in Romantic Hindi sessions. */
 export const NOT_ROMANTIC_RE = /remix|\bdj\b|party|mashup|bass boosted|slowed|reverb|lofi|lo-fi|item song|\brap\b|\btrap\b|club|dance|workout|edm|\bhype\b/i;
