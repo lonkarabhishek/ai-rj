@@ -324,20 +324,21 @@ export function segmentFor(input: SegmentInput): SegmentType {
 }
 
 /** Model per break: full breaks get the stronger writer, short lines the fast one. */
-export function modelFor(input: Pick<SegmentInput, "kind" | "index">) {
+export function modelFor(input: Pick<SegmentInput, "kind" | "index" | "mode">) {
+  if (input.mode === "romantic_s") return process.env.ANTHROPIC_MODEL_SENSUAL || "claude-opus-5-5"; // Sensual: every line, the strongest writer
   const short = (input.kind === "stinger" && input.index > 0) || input.kind === "switch";
   return short ? (process.env.ANTHROPIC_MODEL || "claude-haiku-5-5") : (process.env.ANTHROPIC_MODEL_FULL || "claude-sonnet-5-5");
 }
-/** Request body per model family: Sonnet 5.5 rejects disabled thinking and custom sampling; Haiku keeps the fast settings. */
+/** Request body per model family: Sonnet 5.5 / Opus 5.5 reject disabled thinking and custom sampling; Haiku keeps the fast settings. */
 function anthropicBody(model: string, system: string, user: string) {
   const base = { model, max_tokens: 1024, system, messages: [{ role: "user", content: user }] };
   if (model.includes("sonnet-5-5")) return { ...base, thinking: { type: "between_tools" }, output_config: { effort: "low" }, fallbacks: "default" };
-  if (/opus|fable|mythos/.test(model)) return { ...base, output_config: { effort: "low" } }; // thinking can't be turned off there: keep it shallow
+  if (/opus|fable|mythos/.test(model)) return { ...base, output_config: { effort: "low" }, ...(model.includes("opus-5-5") ? { fallbacks: "default" } : {}) }; // thinking can't be turned off there: keep it shallow
   return { ...base, temperature: 1, thinking: { type: "disabled" } }; // speed matters more than reasoning for a short line
 }
 const anthropicHeaders = (key: string, model: string): Record<string, string> => ({
   "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json",
-  ...(model.includes("sonnet-5-5") ? { "anthropic-beta": "server-side-fallback-2026-07-01" } : {}),
+  ...(/sonnet-5-5|opus-5-5/.test(model) ? { "anthropic-beta": "server-side-fallback-2026-07-01" } : {}),
 });
 
 /** Writes the RJ script with an LLM. Anthropic Claude first, then any OpenAI-compatible API. Null on failure/timeout. */
