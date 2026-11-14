@@ -105,3 +105,23 @@ it's back on screen. Car mode (the "Car" button while live) hides everything exc
 buttons, and keeps the screen awake with the Screen Wake Lock API (re-requested whenever the page comes back). If the
 browser refuses the wake lock, it tells the listener to set Auto-Lock to Never while driving. When the page comes back
 after iOS paused the YouTube player, the song resumes on its own, or shows "Tap to play" if iOS blocks that.
+
+## Your taste, charts and trending
+
+- **Your taste** (Request sheet → "Tell MyRJ what you like", Settings, and a step in the welcome flow): favourite genres
+  and artists. Artist pictures come from Deezer's free public API (`/api/artists`, cached a day on the server; only
+  real pictures are remembered on the phone). Favourite artists count as heavily as artists from the listener's own
+  library when My Mix picks songs; favourite genres fill in when the library is thin. Tapping an artist shows their
+  picture with "<Artist> mix" (starts now, then keeps that artist's vibe) and a favourite toggle.
+- **Charts & trending** (top of the Request sheet, YouTube only), all via `/api/charts`, cached 3 hours on the server:
+  - Trending USA / Mexico / Jamaica / Guatemala: YouTube's most-popular music videos for that country (1 quota unit).
+  - Top 100 Global / USA, Top Latin, Top Dancehall, Soca hits: a public chart playlist found by one search (100
+    units, remembered a day), then read from the public playlist page (no quota).
+  A chart replaces the queue and plays in order, starting right away; when it runs out, My Mix continues.
+
+## News topics
+
+Belize news reads Belizean newsrooms' RSS feeds directly (Breaking Belize News, Amandala, Love FM, Channel 5) plus
+Google News, last 2 days only, de-duplicated. "Weather" (or "Weather in Orange Walk") gives today's forecast from
+Open-Meteo (free, no key; Belize City by default). Up to 8 topics; in each break the DJ takes turns across topics with
+Belize first. New listeners start with Belize and Weather.

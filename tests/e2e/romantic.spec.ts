@@ -177,7 +177,7 @@ for (const o of OPTS) {
   });
 
   test(`${o.name}: YouTube drive soak: TTS down → fallback voice then browser speech; no dead air; wake lock held`, async ({ context, page }, ti) => {
-    await context.addInitScript(() => { (window as any).__wl = { req: 0, rel: 0 }; Object.defineProperty(navigator, "wakeLock", { configurable: true, value: { request: async () => { (window as any).__wl.req++; return { release: async () => { (window as any).__wl.rel++; } }; } } }); });
+    await context.addInitScript(() => { (window as any).__wl = { req: 0, rel: 0 }; Object.defineProperty(navigator, "wakeLock", { configurable: true, value: { request: async () => { (window as any).__wl.req++; const s = { released: false, release: async () => { s.released = true; (window as any).__wl.rel++; } }; (window as any).__wl.last = s; return s; } } }); });
     const w = await setup(context, page, { mobile: mob(ti.project.name), prefs: { music: "youtube", defaultMode: o.mode }, segmentMs: 300, ttsMs: 200, faults: { tts502: true } });
     const y = await setupYt(page, { pool: lib(), songSec: 5 });
     await page.goto("/live"); await goLive(page, w);
@@ -185,8 +185,8 @@ for (const o of OPTS) {
     expect(await page.evaluate(() => (window as any).__wl.req), "wake lock requested").toBeGreaterThan(0);
     // screen was locked and unlocked: wake lock is re-requested when visible again
     const r0 = await page.evaluate(() => (window as any).__wl.req);
-    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-    expect(await page.evaluate(() => (window as any).__wl.req)).toBeGreaterThan(r0);
+    await page.evaluate(() => { (window as any).__wl.last.released = true; document.dispatchEvent(new Event("visibilitychange")); }); // the system dropped the lock while the screen was off
+    await expect.poll(() => page.evaluate(() => (window as any).__wl.req)).toBeGreaterThan(r0);
     // TTS failing (server-side chain Dhruv/Priya -> classic voice -> ElevenLabs already failed): the browser voice speaks the line instead
     await expect.poll(() => page.evaluate(() => (window as any).__speech.length), { timeout: 40000 }).toBeGreaterThan(0);
     const speech = await page.evaluate(() => (window as any).__speech as string[]);

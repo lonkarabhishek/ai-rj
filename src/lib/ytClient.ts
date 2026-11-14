@@ -120,6 +120,7 @@ export class YtCurator {
     const bump = (name: string, lang: SongLang | null) => { const k = name.trim(); if (!k || /various|t-series|zee music|sony music|tips|saregama|yrf|vevo$|records?$|music company/i.test(k)) return; const e = n.get(k) ?? { c: 0, lang: null }; e.c++; e.lang ??= lang; n.set(k, e); };
     for (const v of pool) bump(v.channel.replace(/\s*-\s*Topic$/i, ""), videoLang(v).lang);
     for (const s of this.seeds) bump((s.artists ?? "").split(",")[0], null);
+    for (const a of this.favArtists) for (let i = 0; i < 5; i++) bump(a, null);
     return [...n.entries()].sort((a, b) => b[1].c - a[1].c).map(([name, e]) => ({ name, lang: e.lang }));
   }
 
@@ -191,6 +192,9 @@ export class YtCurator {
     const qs: [string, Tagged["via"]][] = vibe ? [...this.vibe].sort(() => Math.random() - 0.5).slice(0, 2).map((q) => [q, "mode"] as [string, Tagged["via"]])
       : artists.map((a) => [`${a.name} songs`, a.lang ?? (this.langs[0] ?? "mode")]);
     if (rom) { for (const q of [...romanticQueries(this.mode)].sort(() => Math.random() - 0.5).slice(0, 2)) qs.push([q, "hindi"]); }
+    else if (!qs.length && picks.length < 4 && this.favGenreQs.length && this.mode !== "focus") {
+      for (const q of [...this.favGenreQs].sort(() => Math.random() - 0.5).slice(0, 2)) qs.push([q, "mode"]);
+    }
     else if (!qs.length && picks.length < 4) {
       const langs: SongLang[] = this.langs.length ? [...this.langs].sort(() => Math.random() - 0.5) : ["any"];
       for (const l of langs) {
@@ -231,6 +235,17 @@ export class YtCurator {
     return song;
   }
   /** Puts tracks at the front of the queue (previous song, a request). */
+  /** Favourite artists and genres from "Your taste": artists count as if they were all over his library; genres fill in when the library is thin. */
+  private favArtists: string[] = [];
+  private favGenreQs: string[] = [];
+  setTaste(artists: string[], genreQueries: string[]) { this.favArtists = artists.slice(0, 20); this.favGenreQs = genreQueries.slice(0, 12); }
+  /** A ready-made list (chart, trending): it becomes the queue as is, in order. Returns how many songs it has. */
+  playList(videos: YtVideo[]): number {
+    const fit = videos.map((v) => ({ ...v, via: "mode" as Tagged["via"] }))
+      .filter((v) => looksLikeSong(v) && v.seconds <= 900 && !this.bad.has(v.id) && !this.played.has(`yt:${v.id}`));
+    if (fit.length) { this.queue = fit.map(toTrack); this.vibe = []; }
+    return fit.length;
+  }
   pushFront(...t: TrackInfo[]) { const ids = new Set(t.map((x) => x.uri)); this.queue = [...t, ...this.queue.filter((x) => !ids.has(x.uri))]; for (const x of t) if (x.uri) this.played.delete(x.uri); }
   upcoming(n = 8) { return this.queue.slice(0, n); }
 

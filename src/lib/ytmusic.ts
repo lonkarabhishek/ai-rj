@@ -87,3 +87,24 @@ export async function ytLinks(urls: string[]): Promise<YtVideo[]> {
   }
   return tagLangs(out);
 }
+
+/** Trending music videos in a country (videos.list chart=mostPopular, 1 quota unit). */
+export async function ytTrending(region: string, token: string | null): Promise<YtVideo[]> {
+  const j = await yt<{ items: any[] }>(`videos?part=id&chart=mostPopular&videoCategoryId=10&regionCode=${encodeURIComponent(region)}&maxResults=50`, token);
+  return tagLangs(await details(j.items.map((x) => x.id).filter(Boolean), token));
+}
+
+const listCache = new Map<string, { at: number; id: string | null }>();
+/** Finds a public chart playlist by name (one search, 100 units, remembered for a day) and reads it from the public page (no quota). */
+export async function ytChartPlaylist(q: string, token: string | null): Promise<YtVideo[]> {
+  let hit = listCache.get(q);
+  if (!hit || Date.now() - hit.at > 86_400_000) {
+    const j = await yt<{ items: any[] }>(`search?part=snippet&type=playlist&maxResults=10&q=${encodeURIComponent(q)}`, token);
+    const words = q.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+    const score = (x: any) => words.filter((w) => `${x.snippet?.title}`.toLowerCase().includes(w)).length + (/youtube music|charts/i.test(x.snippet?.channelTitle ?? "") ? 2 : 0);
+    const best = [...j.items].sort((a, b) => score(b) - score(a))[0];
+    hit = { at: Date.now(), id: best?.id?.playlistId ?? null };
+    listCache.set(q, hit);
+  }
+  return hit.id ? ytLinks([`https://www.youtube.com/playlist?list=${hit.id}`]) : [];
+}

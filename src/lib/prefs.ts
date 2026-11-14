@@ -23,6 +23,8 @@ export interface Prefs {
   justMusic: boolean; // RJ keeps to minimal intros (silent in Focus)
   vibeTags?: string[]; // mood/genre tags steering discovery (ids from VIBE_TAGS)
   station?: string | null; // null = mix; "library" = my likes + playlists; or one imported playlist URL
+  favGenres?: string[]; // "Your taste": genre ids from VIBE_TAGS
+  favArtists?: { name: string; image?: string | null }[]; // "Your taste": favourite artists (picture from /api/artists)
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -32,7 +34,7 @@ export const DEFAULT_PREFS: Prefs = {
   energy: "balanced",
   language: "english",
   humor: "normal",
-  newsTopics: ["AI"],
+  newsTopics: ["Belize", "Weather"],
   source: "top",
   externalPlaylists: [],
   onboarded: false,
@@ -183,3 +185,21 @@ export const NOT_ORIGINAL_RE = /\b(re-?mix(ed)?|mash-?up|lo-?fi|slowed|reverb|sp
 export const isOriginal = (title: string) => !NOT_ORIGINAL_RE.test(title);
 /** Titles that break the soft, late-night mood (or are not a clean song): skipped in Romantic Hindi sessions. */
 export const NOT_ROMANTIC_RE = /remix|\bdj\b|party|mashup|bass boosted|slowed|reverb|lofi|lo-fi|item song|\brap\b|\btrap\b|club|dance|workout|edm|\bhype\b/i;
+
+/** Artists to suggest per genre in "Your taste" (pictures are looked up live). Belizean and Caribbean names first where they fit. */
+export const GENRE_ARTISTS: Record<string, string[]> = {
+  punta: ["Supa G", "Andy Palacio", "Aurelio Martinez", "The Garifuna Collective"],
+  reggae: ["Bob Marley & The Wailers", "Chronixx", "Protoje", "Koffee", "Damian Marley", "Romain Virgo"],
+  dancehall: ["Vybz Kartel", "Popcaan", "Shenseea", "Skillibeng", "Valiant", "Masicka"],
+  soca: ["Machel Montano", "Kes", "Bunji Garlin", "Patrice Roberts", "Nailah Blackman", "Voice"],
+  reggaeton: ["Bad Bunny", "Karol G", "Feid", "Rauw Alejandro", "Daddy Yankee", "J Balvin"],
+  latin: ["Shakira", "Marc Anthony", "Carlos Vives", "Grupo Niche", "Juan Luis Guerra"],
+  bachata: ["Romeo Santos", "Prince Royce", "Aventura", "Juan Luis Guerra", "Frank Reyes"],
+  regional: ["Peso Pluma", "Grupo Frontera", "Carin León", "Fuerza Regida", "Natanael Cano"],
+  worship: ["Elevation Worship", "Maverick City Music", "Hillsong Worship", "CeCe Winans", "Barak"],
+  rnb: ["SZA", "Chris Brown", "Brent Faiyaz", "Summer Walker", "Usher", "Tems"],
+  hiphop: ["Drake", "Kendrick Lamar", "Travis Scott", "J. Cole", "Future", "Lil Baby"],
+  pop: ["Taylor Swift", "Dua Lipa", "The Weeknd", "Sabrina Carpenter", "Bruno Mars", "Billie Eilish"],
+  country: ["Morgan Wallen", "Luke Combs", "Zach Bryan", "Chris Stapleton", "Carrie Underwood"],
+  throwbacks: ["Michael Jackson", "Whitney Houston", "Bob Marley & The Wailers", "Shaggy", "Sean Paul", "Beenie Man"],
+};

@@ -1,11 +1,12 @@
 "use client";
 import { Mascot } from "@/components/Mascot";
+import { TastePanel } from "@/components/Taste";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { EnergyPicker, HumorPicker, LanguagePicker, ModePicker, SongLangPicker, MusicImport, NameFields, SpotifyConnect, TopicsEditor, VoicePicker, usePrefs } from "@/components/prefs";
 import { Button, cx } from "@/components/ui";
 
-const STEPS = ["welcome", "names", "language", "voice", "energy", "humor", "news", "spotify", "mode"] as const;
+const STEPS = ["welcome", "names", "language", "voice", "energy", "humor", "news", "taste", "spotify", "mode"] as const;
 const COPY: Record<(typeof STEPS)[number], { title: string; sub: string }> = {
   welcome: { title: "Your own radio.\nHosted by your own RJ.", sub: "Music you love, news you care about, jokes in your humor. Takes a minute to set up." },
   names: { title: "First, introductions.", sub: "Name your RJ, and tell them what to call you." },
@@ -14,6 +15,7 @@ const COPY: Record<(typeof STEPS)[number], { title: string; sub: string }> = {
   energy: { title: "How much energy?", sub: "Morning chai or full stadium." },
   humor: { title: "What's your humor?", sub: "Your RJ drops a joke between songs." },
   news: { title: "What should you never miss?", sub: "One or two headlines between songs, only on these." },
+  taste: { title: "What do you love to hear?", sub: "Pick your genres and a few favourite artists. Tap an artist to add them." },
   spotify: { title: "Bring your music.", sub: "MyRJ curates from your Spotify or YouTube: likes, playlists, top tracks and new finds. Spotify Premium (or YouTube) plays full songs." },
   mode: { title: "How do you listen?", sub: "Pick a mode and song languages. You can change both before every session." },
 };
@@ -57,6 +59,7 @@ function Flow() {
           {step === "energy" && <EnergyPicker p={p} up={up} />}
           {step === "humor" && <HumorPicker p={p} up={up} />}
           {step === "news" && <TopicsEditor p={p} up={up} />}
+          {step === "taste" && <TastePanel p={p} up={up} bare />}
           {step === "spotify" && (
             <div className="space-y-8">
               <SpotifyConnect returnTo="/welcome?step=spotify" />

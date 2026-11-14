@@ -1,20 +1,10 @@
 import { test, expect, type Page } from "@playwright/test";
 import { setup, goLive, realErrors } from "./fake";
+import { POOL, S, lastLoad, loadsOf, mob, startYt } from "./playerKit";
 import { setupYt, vid, type FV } from "./fakeYt";
 
 /* Now Playing: cover art, swipe/previous/next transitions, lyrics synced to the player clock, requests and stations. */
-const mob = (n: string) => n === "mobile";
-const S = 60; // fake song length in seconds; videos report the same length so none looks like an ad
-const POOL = () => [
-  vid("english", "Shape of You", { channel: "Ed Sheeran", seconds: S }), vid("english", "Blinding Lights", { channel: "The Weeknd - Topic", seconds: S }),
-  vid("english", "Levitating", { channel: "Dua Lipa", seconds: S }), vid("english", "Perfect", { channel: "Ed Sheeran", seconds: S }),
-  vid("english", "Stay", { channel: "Justin Bieber", seconds: S }), vid("english", "Peaches", { channel: "Justin Bieber", seconds: S }),
-  vid("english", "Believer", { channel: "Imagine Dragons", seconds: S }), vid("english", "Thunder", { channel: "Imagine Dragons", seconds: S }),
-];
 const title = (p: Page) => p.getByTestId("now-title").first().innerText();
-// Videos the player was asked to load, read from the fake IFrame player itself (exact, in order).
-const loadsOf = (p: Page) => p.evaluate(() => ((window as any).__yt?.calls ?? []).filter((c: string) => c.startsWith("load:")).map((c: string) => c.slice(5)) as string[]);
-const lastLoad = async (p: Page, k = 1) => { const l = await loadsOf(p); return l[l.length - k]; };
 async function swipeArt(page: Page, dx: number) {
   const b = (await page.getByTestId("art-stage").boundingBox())!;
   const x = b.x + b.width / 2, yy = b.y + b.height / 2;
@@ -22,12 +12,6 @@ async function swipeArt(page: Page, dx: number) {
   for (let i = 1; i <= 10; i++) { await page.mouse.move(x + (dx * i) / 10, yy + i); await page.waitForTimeout(16); } // one move per frame, like a finger
   await page.mouse.up();
 }
-async function startYt(page: Page, w: Awaited<ReturnType<typeof setup>>, y: Awaited<ReturnType<typeof setupYt>>) {
-  await page.goto("/live"); await goLive(page, w);
-  await expect.poll(async () => (await loadsOf(page)).length, { timeout: 30000 }).toBeGreaterThan(0);
-  await expect(page.getByTestId("now-title").first()).toBeVisible({ timeout: 20000 });
-}
-
 test("cover art: real album cover for a YouTube song, video stays a visible ≥200px tile, art and title follow the song", async ({ context, page }, ti) => {
   const w = await setup(context, page, { mobile: mob(ti.project.name), prefs: { music: "youtube", songLangs: ["any"], talk: { news: false, jokes: false, facts: false }, justMusic: true }, segmentMs: 200, ttsMs: 200 });
   const y = await setupYt(page, { pool: POOL(), songSec: S });

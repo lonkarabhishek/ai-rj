@@ -5,6 +5,7 @@ import { useState, type ReactNode } from "react";
 import { VIBE_TAGS, type Prefs, type TrackInfo } from "@/lib/prefs";
 import { ExternalPlaylists, MusicImport, type Up } from "./prefs";
 import { cx, Spinner } from "./ui";
+import { ForYou, type TasteRequest } from "./Taste";
 
 /** iOS-style sheet: springs up, drag the grabber (or the top area) down to close, backdrop tap closes, page behind stays put. */
 export function Sheet({ open, onClose, label, children, footer }: { open: boolean; onClose: () => void; label: string; children: ReactNode; footer?: ReactNode }) {
@@ -62,9 +63,9 @@ export function MiniPlayer({ track, art, paused, onToggle, onNext, onExpand, spe
 }
 
 /** Ask for a song, an artist or a feeling; or tap a mood/genre tag. */
-export function DiscoverPanel({ p, up, busy, last, onRequest, live }: {
-  p: Prefs; up: Up; busy: boolean; last: string | null; live: boolean;
-  onRequest: (r: { text?: string; tag?: string }) => void;
+export function DiscoverPanel({ p, up, busy, last, onRequest, live, onOpenTaste }: {
+  p: Prefs; up: Up; busy: boolean; last: string | null; live: boolean; onOpenTaste: () => void;
+  onRequest: (r: { text?: string; tag?: string } & TasteRequest) => void;
 }) {
   const [text, setText] = useState("");
   const tags = p.vibeTags ?? [];
@@ -87,6 +88,7 @@ export function DiscoverPanel({ p, up, busy, last, onRequest, live }: {
         </button>
       </form>
       {last && <p className="text-[13px] text-[#9fc0ff]" data-testid="request-status" aria-live="polite">{last}</p>}
+      <ForYou p={p} busy={busy} onRequest={onRequest} onOpenTaste={onOpenTaste} />
       <div>
         <p className="mb-2 text-[12px] font-semibold uppercase tracking-[0.12em] text-white/45">Moods</p>
         <div className="flex flex-wrap gap-2">{VIBE_TAGS.filter((t) => t.kind === "mood").map((t) => <Tag key={t.id} on={tags.includes(t.id)} onClick={() => toggle(t.id)}>{t.label}</Tag>)}</div>

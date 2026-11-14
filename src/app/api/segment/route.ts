@@ -22,7 +22,7 @@ function parse(b: Record<string, unknown>): Omit<SegmentInput, "headlines"> {
     language: oneOf(p.language, LANGUAGES.map((l) => l.id), "english"),
     humor: oneOf(p.humor, HUMORS, "normal"),
     energy: oneOf(p.energy, ENERGIES, "balanced"),
-    newsTopics: (Array.isArray(p.newsTopics) ? p.newsTopics : []).map((x) => str(x, 40).trim()).filter(Boolean).slice(0, 5),
+    newsTopics: (Array.isArray(p.newsTopics) ? p.newsTopics : []).map((x) => str(x, 40).trim()).filter(Boolean).slice(0, 8),
     talk: { news: talk.news !== false, jokes: talk.jokes !== false, facts: talk.facts !== false },
     justMusic: p.justMusic === true,
   };
@@ -64,8 +64,13 @@ export async function POST(req: Request) {
   }
   const wantNews = body.withNews ?? (!romantic && (!body.mode || body.mode === "default" || body.mode === "drive") && index % 2 === 0);
   const headlines = wantNews && body.kind !== "stinger" && prefs.newsTopics?.length ? await fetchHeadlines(prefs.newsTopics, prefs.language, 6).catch(() => []) : [];
-  // shuffle so repeated segments vary
+  // Shuffle within each topic so repeated segments vary, then take turns across topics (Belize first), so one busy topic
+  // doesn't crowd out the others and local news leads.
   headlines.sort(() => Math.random() - 0.5);
+  const order = [...new Set(headlines.map((h) => h.topic))].sort((a, b) => Number(/belize/i.test(b)) - Number(/belize/i.test(a)));
+  const byTopic = order.map((t) => headlines.filter((h) => h.topic === t));
+  headlines.length = 0;
+  while (byTopic.some((g) => g.length)) for (const g of byTopic) { const h = g.shift(); if (h) headlines.push(h); }
   // drop headlines already read out recently
   const recent = (body.recent ?? []).join(" ");
   const seen = new Set<string>();

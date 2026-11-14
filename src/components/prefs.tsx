@@ -1,6 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 import { useEffect, useRef, useState } from "react";
+import { TastePanel } from "./Taste";
 import { AUTO_VOICE, BROWSER_VOICE, SPEECH_LANG, ROMANTIC_MODES, modeInfo, SONG_LANGS, toggleSongLang, DEFAULT_PREFS, ENERGIES, HUMORS, LANGUAGES, MODES, loadPrefs, savePrefs, type Prefs, type TrackInfo } from "@/lib/prefs";
 import { getMe } from "@/lib/spotifyClient";
 import { speakText } from "@/lib/browserVoice";
@@ -88,8 +89,9 @@ export function ModePicker({ value, onChange }: { value: Prefs["defaultMode"]; o
 
 export function TopicsEditor({ p, up }: { p: Prefs; up: Up }) {
   const [t, setT] = useState("");
-  const SUGGEST = ["AI", "Startups", "Cricket", "Tech", "Bollywood", "Markets", "Pune", "Science", "F1", "Space"];
-  const add = (x: string) => { x = x.trim(); if (x && !p.newsTopics.some((y) => y.toLowerCase() === x.toLowerCase())) up("newsTopics", [...p.newsTopics, x]); };
+  const SUGGEST = ["Belize", "Weather", "Belize sports", "Caribbean", "Central America", "Music news", "Reggae & dancehall", "Football", "Hurricanes",
+    "Business", "Tech", "AI", "Faith", "Health", "Science", "Space", "Movies", "World news"];
+  const add = (x: string) => { x = x.trim(); if (p.newsTopics.length >= 8) return; if (x && !p.newsTopics.some((y) => y.toLowerCase() === x.toLowerCase())) up("newsTopics", [...p.newsTopics, x]); };
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2">
@@ -99,7 +101,7 @@ export function TopicsEditor({ p, up }: { p: Prefs; up: Up }) {
           <Chip key={y} on onClick={() => up("newsTopics", p.newsTopics.filter((z) => z !== y))}>{y} ✕</Chip>)}
       </div>
       <form onSubmit={(e) => { e.preventDefault(); add(t); setT(""); }}>
-        <input className={inputCls} placeholder="Add your own topic and press enter" value={t} onChange={(e) => setT(e.target.value)} />
+        <input className={inputCls} placeholder='Add your own, e.g. "Weather in Orange Walk", and press enter' value={t} onChange={(e) => setT(e.target.value)} />
       </form>
     </div>
   );
@@ -249,7 +251,8 @@ export function AllPrefs({ p, up, compact, returnTo }: { p: Prefs; up: Up; compa
       <Section title="Voice" hint="Tap ▶ to preview."><VoicePicker p={p} up={up} compact={compact} /></Section>
       <Section title="Energy"><EnergyPicker p={p} up={up} /></Section>
       <Section title="Humor" hint="From squeaky clean to pitch dark."><HumorPicker p={p} up={up} /></Section>
-      <Section title="News" hint="Only these topics make it on air."><TopicsEditor p={p} up={up} /></Section>
+      <Section title="Your taste" hint="Favourite genres and artists. Your mix plays more of them."><TastePanel p={p} up={up} bare /></Section>
+      <Section title="News" hint="Up to 8 topics. Belize news always goes first."><TopicsEditor p={p} up={up} /></Section>
       <Section title="Song language" hint="Which songs to play. Your RJ's speaking language is set above."><SongLangPicker p={p} up={up} /></Section>
       <Section title="Your RJ talks about"><TalkToggles p={p} up={up} /></Section>
       <Section title="Default mode"><ModePicker value={p.defaultMode} onChange={(m) => up("defaultMode", m)} /></Section>

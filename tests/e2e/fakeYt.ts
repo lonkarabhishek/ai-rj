@@ -7,6 +7,7 @@ export class YtWorld {
   searches: string[] = [];
   poolCalls = 0;
   moodCalls = 0;
+  charts: string[] = [];
   calls: string[] = [];
   videos = new Map<string, FV>();
   add(v: FV) { this.videos.set(v.id, v); return v; }
@@ -36,7 +37,7 @@ const SDK = (songSec: number) => `(() => {
   setTimeout(() => window.onYouTubeIframeAPIReady && window.onYouTubeIframeAPIReady(), 50);
 })();`;
 
-export async function setupYt(page: Page, o: { songSec?: number; connected?: boolean; pool?: FV[]; search?: (q: string) => FV[]; links?: FV[]; moodFail?: boolean } = {}) {
+export async function setupYt(page: Page, o: { songSec?: number; connected?: boolean; pool?: FV[]; search?: (q: string) => FV[]; links?: FV[]; moodFail?: boolean; charts?: (key: string) => FV[] } = {}) {
   const w = new YtWorld();
   for (const v of [...(o.pool ?? []), ...(o.links ?? [])]) w.add(v);
   const out = (v: FV) => ({ id: v.id, title: v.title, channel: v.channel, seconds: v.seconds, audioLang: v.audioLang, lang: v.label });
@@ -53,6 +54,11 @@ export async function setupYt(page: Page, o: { songSec?: number; connected?: boo
   await page.route("**/api/youtube/songs?status", (r) => r.fulfill({ json: { configured: true, connected: o.connected ?? true } }));
   await page.route("**/api/youtube/pool", async (r) => { w.poolCalls++; await new Promise((x) => setTimeout(x, 500)); r.fulfill({ json: { videos: (o.pool ?? []).map(out) } }); });
   await page.route("**/api/youtube/links", (r) => r.fulfill({ json: { videos: (o.links ?? []).map(out) } }));
+  await page.route("**/api/charts**", async (r) => {
+    const u = new URL(r.request().url()), key = `${u.searchParams.get("kind")}:${u.searchParams.get("region") ?? u.searchParams.get("chart")}`;
+    w.charts.push(key); await new Promise((x) => setTimeout(x, 300));
+    r.fulfill({ json: { videos: (o.charts?.(key) ?? []).map((v) => w.add(v)).map(out) } });
+  });
   await page.route("**/api/youtube/search**", async (r) => {
     const q = new URL(r.request().url()).searchParams.get("q") ?? ""; w.searches.push(q);
     await new Promise((x) => setTimeout(x, 600));

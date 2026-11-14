@@ -14,6 +14,8 @@ import { Visualizer } from "@/components/Visualizer";
 import { ArtStage, FallbackArt, TrackTitle, type Dir } from "@/components/ArtStage";
 import { LyricsView } from "@/components/LyricsView";
 import { DiscoverPanel, LibraryPanel, MiniPlayer, Sheet } from "@/components/Sheets";
+import { TastePanel, type ChartPick } from "@/components/Taste";
+import type { YtVideo } from "@/lib/ytmusic";
 import { getArt, trackKey, type Art } from "@/lib/artwork";
 import { Lyrics } from "@/components/Lyrics";
 import { Mascot } from "@/components/Mascot";
@@ -22,7 +24,8 @@ const SILENT_WAV = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAAC
 declare global { interface Window { Spotify: any; onSpotifyWebPlaybackSDKReady: () => void } }
 
 type Out = "sdk" | "connect" | "youtube" | "preview" | "none";
-type AnyCurator = { next(): Promise<TrackInfo | null>; peek(): TrackInfo | null; steer?(s: Steer): Promise<TrackInfo | null>; pushFront?(...t: TrackInfo[]): void; upcoming?(n?: number): TrackInfo[] };
+type ListSteer = Steer & { list?: YtVideo[] }; // a chart or trending list: plays as is, in order
+type AnyCurator = { next(): Promise<TrackInfo | null>; peek(): TrackInfo | null; steer?(s: Steer): Promise<TrackInfo | null>; pushFront?(...t: TrackInfo[]): void; playList?(v: YtVideo[]): number; setTaste?(artists: string[], genreQueries: string[]): void; upcoming?(n?: number): TrackInfo[] };
 type Phase = "idle" | "tuning" | "rj" | "song" | "waiting" | "recovering";
 interface Diag { account?: string; product?: string; scopes?: string; sdk?: string; device?: string; output?: string; error?: string; timings?: string; breaks?: string; voice?: string; script?: string; audio?: string; log?: string[] }
 type BreakKind = "none" | "stinger" | "full" | "switch";
@@ -53,6 +56,12 @@ function loadSdk(): Promise<void> {
 function LiveInner() {
   const search = useSearchParams();
   const [prefs, up, loaded] = usePrefs();
+  // Taste edits apply to the running mix right away (favourite artists and genres feed the next refill).
+  const upTaste: typeof up = (k, v) => {
+    up(k, v);
+    const p = { ...loadPrefs(), [k]: v };
+    curatorRef.current?.setTaste?.((p.favArtists ?? []).map((a) => a.name), vibeQueries(p.favGenres ?? []));
+  };
   const [listenMode, setListenMode] = useState<ListenMode>("default");
   const [phase, setPhase] = useState<Phase>("idle");
   const [status, setStatus] = useState("");
@@ -76,17 +85,18 @@ function LiveInner() {
   const dirRef = useRef<Dir>(1);
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const lyricsOpenRef = useRef(false); useEffect(() => { lyricsOpenRef.current = lyricsOpen; }, [lyricsOpen]);
-  const [sheet, setSheet] = useState<null | "discover" | "library">(null);
+  const [sheet, setSheet] = useState<null | "discover" | "library" | "taste">(null);
   const [reqBusy, setReqBusy] = useState(false);
   const [reqMsg, setReqMsg] = useState<string | null>(null);
   const [upcoming, setUpcoming] = useState<TrackInfo[]>([]);
   const [vol, setVol] = useState(1);
   const volRef = useRef(1); // listener's own volume (desktop players we control); fades scale under it
   const injectRef = useRef<TrackInfo[]>([]); // play these next, ahead of the curator (requests, previous)
+  const dropNextRef = useRef(false); // the queue was replaced (chart, artist mix): the song that was lined up doesn't come back
   const steerGenRef = useRef(0); // bumped by every new request/previous/station change, so each one is applied exactly once
   const refreshNextRef = useRef(false);      // the vibe changed: the already-picked next song is dropped
   const requestNoteRef = useRef<string | null>(null); // what the listener asked for, for the DJ to acknowledge once
-  const pendingSteerRef = useRef<Steer | null>(null); // a request made before going live
+  const pendingSteerRef = useRef<ListSteer | null>(null); // a request made before going live
   const playedRef = useRef<TrackInfo[]>([]);
   const nowRef = useRef<TrackInfo | null>(null);
   const songClockRef = useRef<(() => number | null) | null>(null); // the real playback position (seconds) of the current song
@@ -131,7 +141,8 @@ function LiveInner() {
   // never talks OVER a YouTube song: she speaks in the gap between songs while the video is paused/ended.
   const ytNoDuck = () => typeof window !== "undefined" && (!!(window as any).__noDuck || /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
   const canDuck = () => outRef.current === "sdk" || (outRef.current === "youtube" && !ytNoDuck());
-  const mkCurator = (m: ListenMode): AnyCurator => outRef.current === "youtube"
+  const mkCurator = (m: ListenMode): AnyCurator => { const c = mkCurator0(m); const tp = loadPrefs(); c.setTaste?.((tp.favArtists ?? []).map((a) => a.name), vibeQueries(tp.favGenres ?? [])); return c; };
+  const mkCurator0 = (m: ListenMode): AnyCurator => outRef.current === "youtube"
     ? new YtCurator(m, effectiveSongLangs(m, loadPrefs().songLangs), (loadPrefs().externalPlaylists ?? []).map((x) => x.url), loadPrefs().tasteSeeds ?? [], isRomantic(m) ? [] : vibeQueries(loadPrefs().vibeTags), loadPrefs().station ?? null)
     : new Curator(m, loadPrefs().tasteSeeds ?? [], effectiveSongLangs(m, loadPrefs().songLangs));
   const recentRef = useRef<string[]>([]);
@@ -435,9 +446,28 @@ function LiveInner() {
   function swipe(d: 1 | -1) { log(`swipe ${d === 1 ? "next" : "previous"}`); navigator.vibrate?.(6); if (d === 1) next(); else previous(); }
   const describe = (s: Steer) => (s.kind === "song" ? `Playing your request: ${s.label}` : s.kind === "artist" ? `More ${s.label} coming up` : `Vibe: ${s.label}`);
   /** A request (typed or a tag). Live: a named song plays next (now, if a song is on); a mood takes over from the next song. Idle: saved for Go Live. */
-  async function requestSteer(r: { text?: string; tag?: string }) {
-    let st: Steer | null = null;
-    if (r.tag !== undefined) {
+  /** Applies a request to the curator and returns the song to play right away, if any. */
+  async function applySteer(st: ListSteer): Promise<TrackInfo | null> {
+    const c = curatorRef.current; if (!c) return null;
+    if (st.list) return (c.playList?.(st.list) ?? 0) ? c.next() : null;
+    const song = await c.steer!(st);
+    return song ?? (st.kind === "artist" ? c.next() : null); // an artist mix starts now, not after the current song
+  }
+  async function requestSteer(r: { text?: string; tag?: string; artist?: string; chart?: ChartPick }) {
+    let st: ListSteer | null = null;
+    if (r.artist) st = { kind: "artist", label: `${r.artist} mix`, queries: [`${r.artist} songs`, `${r.artist} best songs`], song: null };
+    else if (r.chart) {
+      const ch = r.chart;
+      if ((outRef.current !== "none" ? outRef.current : loadPrefs().music === "youtube" ? "youtube" : "spotify") !== "youtube") { setReqMsg("Charts play from YouTube. Switch the music source to YouTube in settings."); return; }
+      setReqBusy(true); setReqMsg(null);
+      try {
+        const res = await fetch(`/api/charts?kind=${ch.kind}${ch.region ? `&region=${ch.region}` : ""}${ch.chart ? `&chart=${ch.chart}` : ""}`);
+        const j = await res.json().catch(() => null);
+        if (!res.ok || !j?.videos?.length) { setReqMsg(res.status === 429 ? "YouTube's free daily limit is used up. Charts are back tomorrow." : j?.error ?? "Couldn't load that chart. Try again."); return; }
+        st = { kind: "search", label: `${ch.label}${ch.sub ? ` · ${ch.sub}` : ""}`, queries: [], song: null, list: j.videos };
+      } catch { setReqMsg("You're offline. Try again in a moment."); return; }
+      finally { setReqBusy(false); }
+    } else if (r.tag !== undefined) {
       const t = VIBE_TAGS.find((x) => x.id === r.tag);
       st = t ? { kind: "mood", label: t.label, queries: t.q, song: null } : null;
       if (!st) {
@@ -460,14 +490,15 @@ function LiveInner() {
     if (phaseRef.current === "idle" || !curatorRef.current?.steer) { pendingSteerRef.current = st; setReqMsg(`Saved: ${st.label}. It plays when you go live.`); return; }
     setReqBusy(true);
     try {
-      const song = await curatorRef.current.steer(st);
+      const song = await applySteer(st);
       if (st.song && !song) setReqMsg(`Couldn't find "${st.label}". Playing similar songs instead.`);
-      else setReqMsg(describe(st));
+      else if (st.list && !song) { setReqMsg("Nothing in that chart could play here. Try another one."); return; }
+      else setReqMsg(st.list ? `Playing ${st.label}.` : st.kind === "artist" ? `Playing the ${st.label}.` : describe(st));
       requestNoteRef.current = st.label;
       setUpcoming(curatorRef.current.upcoming?.(8) ?? []);
       steerGenRef.current++;
       if (song) {
-        injectRef.current = [song];
+        injectRef.current = [song]; dropNextRef.current = !!st.list || st.kind === "artist";
         if (phaseRef.current === "song" || phaseRef.current === "waiting") { dirRef.current = 1; if (pausedRef.current) { setPausedState(false); appliedPauseRef.current = false; applyPauseLocal(false); } skipRef.current(); }
       } else refreshNextRef.current = true;
     } finally { setReqBusy(false); }
@@ -1243,7 +1274,8 @@ function LiveInner() {
     const steerNext = async (idx: number) => {
       if (injectRef.current.length) {
         const inj = injectRef.current.shift()!;
-        if (next && next.uri !== inj.uri) curatorRef.current?.pushFront?.(next);
+        if (next && next.uri !== inj.uri && !dropNextRef.current) curatorRef.current?.pushFront?.(next);
+        dropNextRef.current = false;
         next = inj; setUpNext(inj);
       } else if (refreshNextRef.current) {
         refreshNextRef.current = false;
@@ -1255,8 +1287,8 @@ function LiveInner() {
     };
     if (pendingSteerRef.current && curatorRef.current?.steer) {
       const st = pendingSteerRef.current; pendingSteerRef.current = null;
-      const song = await curatorRef.current.steer(st).catch(() => null);
-      if (song) injectRef.current = [song]; else refreshNextRef.current = true;
+      const song = await applySteer(st).catch(() => null);
+      if (song) { injectRef.current = [song]; dropNextRef.current = !!st.list || st.kind === "artist"; } else refreshNextRef.current = true;
       requestNoteRef.current = st.label;
     }
 
@@ -1564,7 +1596,10 @@ function LiveInner() {
       </Sheet>
 
       <Sheet open={sheet === "discover"} onClose={() => setSheet(null)} label="Request" footer={live ? mini : undefined}>
-        <DiscoverPanel p={prefs} up={up} busy={reqBusy} last={reqMsg} live={live} onRequest={requestSteer} />
+        <DiscoverPanel p={prefs} up={up} busy={reqBusy} last={reqMsg} live={live} onRequest={requestSteer} onOpenTaste={() => setSheet("taste")} />
+      </Sheet>
+      <Sheet open={sheet === "taste"} onClose={() => setSheet(null)} label="Your taste" footer={live ? mini : undefined}>
+        <TastePanel p={prefs} up={upTaste} onRequest={(r) => { setSheet("discover"); requestSteer(r); }} />
       </Sheet>
       <Sheet open={sheet === "library"} onClose={() => setSheet(null)} label="Library" footer={live ? mini : undefined}>
         <LibraryPanel p={prefs} up={up} upcoming={upcoming} source={prefs.music} onStation={changeStation} />

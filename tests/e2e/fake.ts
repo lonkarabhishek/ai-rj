@@ -219,6 +219,13 @@ export async function setup(ctx: BrowserContext, page: Page, o: Opts) {
     r.fulfill({ json: { art: `https://covers.test/${encodeURIComponent(t)}.png`, title: t } });
   });
   await page.route("https://covers.test/**", (r) => (o.artFail ? r.fulfill({ status: 404, body: "" }) : r.fulfill({ status: 200, contentType: "image/png", headers: { "access-control-allow-origin": "*" }, body: COVER })));
+  await page.route("**/api/artists?**", async (r) => {
+    const u = new URL(r.request().url()); await sleep(jitter(40, 120));
+    const q = u.searchParams.get("q");
+    if (q) return r.fulfill({ json: { artists: [{ name: q, image: `https://covers.test/artist-${encodeURIComponent(q)}.png` }] } });
+    const names = (u.searchParams.get("names") ?? "").split(",").filter(Boolean);
+    r.fulfill({ json: { artists: names.map((n) => ({ name: n, image: `https://covers.test/artist-${encodeURIComponent(n)}.png` })) } });
+  });
   await page.route("**/api/lyrics?**", async (r) => {
     const t = new URL(r.request().url()).searchParams.get("title") ?? "";
     await sleep(jitter(40, 120));
