@@ -25,6 +25,9 @@ const BELIZE_FEEDS = [
   "https://edition.channel5belize.com/feed/",
 ];
 const FRESH_MS = 2 * 86_400_000;
+const FEED_NAMES: [RegExp, string][] = [[/breakingbelizenews/i, "Breaking Belize News"], [/amandala/i, "Amandala"], [/lovefm/i, "Love FM"], [/channel5/i, "News 5"]];
+// Not stories: a newspaper's issue listing ("Amandala #3976 Friday, November 13"), e-paper and edition posts.
+const NOT_NEWS = /#\s?\d{3,}|\be-?paper\b|\b(today'?s|this week'?s) (edition|issue)\b|^edition\b/i;
 
 async function rss(url: string, n: number, topic: string, fixedSource?: string): Promise<Headline[]> {
   const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 MyRJ" }, signal: AbortSignal.timeout(5000) });
@@ -41,7 +44,7 @@ async function rss(url: string, n: number, topic: string, fixedSource?: string):
     const link = decode(it.match(/<link>([\s\S]*?)<\/link>/)?.[1] ?? "");
     // Google News titles end with " - Source"
     const title = source && rawTitle.endsWith(` - ${source}`) ? rawTitle.slice(0, -(source.length + 3)) : rawTitle;
-    if (title) out.push({ title, source: source || channel, link, topic });
+    if (title && !NOT_NEWS.test(title)) out.push({ title, source: FEED_NAMES.find(([re]) => re.test(url))?.[1] ?? (source || channel), link, topic });
   }
   return out;
 }
