@@ -4,7 +4,12 @@ import { SCOPES, cookieOpts } from "@/lib/spotify";
 
 export async function GET(req: Request) {
   const redirectUri = process.env.SPOTIFY_REDIRECT_URI;
-  if (!redirectUri || !process.env.SPOTIFY_CLIENT_ID) return Response.json({ error: "Spotify env vars not set" }, { status: 500 });
+  if (!redirectUri || !process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET) {
+    // Not set up on this server: back to the page the listener came from, with a plain explanation (never a raw JSON error page).
+    const ret = new URL(req.url).searchParams.get("return");
+    const back = ret && /^\/(?!\/)[a-z0-9/_?=&-]*$/i.test(ret) ? ret : "/settings";
+    return NextResponse.redirect(new URL(`${back}${back.includes("?") ? "&" : "?"}spotify=unconfigured`, req.url));
+  }
   const target = new URL(redirectUri);
   const host = req.headers.get("host") ?? new URL(req.url).host;
   // Cookies are per-host: keep the whole flow on the redirect URI's host (e.g. 127.0.0.1 vs localhost).

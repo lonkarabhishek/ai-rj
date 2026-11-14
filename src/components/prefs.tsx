@@ -161,8 +161,10 @@ export function VoicePicker({ p, up, compact }: { p: Prefs; up: Up; compact?: bo
   add("ElevenLabs", voices.filter((v) => v.provider === "elevenlabs"));
   if (error) return <p className="text-sm text-red-300">{error}. Your device&apos;s own voice will be used.</p>;
   if (!voices.length) return <div className="flex items-center gap-2 text-sm text-zinc-500"><Spinner /> Loading voices…</div>;
+  const onlyDevice = voices.every((v) => v.provider === "system");
   return (
     <div className="space-y-3">
+      {onlyDevice && <p className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-zinc-300" data-testid="voices-device-only">No studio voice is set up yet, so your RJ uses this device&apos;s own voice. Add <code>GEMINI_API_KEY</code> in Vercel for the natural voices. On iPhone, turn the silent switch off to hear it.</p>}
       <div className={cx("space-y-5 overflow-y-auto no-scrollbar pr-1", compact ? "max-h-72" : "max-h-[50vh]")}>
         {groups.map(([label, list]) => (
           <div key={label} className="space-y-2">
@@ -196,8 +198,14 @@ export function VoicePicker({ p, up, compact }: { p: Prefs; up: Up; compact?: bo
 
 export function SpotifyConnect({ returnTo = "/settings" }: { returnTo?: string }) {
   const [me, setMe] = useState<{ display_name: string; product: string } | null | undefined>(undefined);
-  useEffect(() => { getMe().then(setMe).catch(() => setMe(null)); }, []);
+  const [flag, setFlag] = useState<string | null>(null);
+  useEffect(() => { getMe().then(setMe).catch(() => setMe(null)); setFlag(new URLSearchParams(location.search).get("spotify")); }, []);
   if (me === undefined) return <div className="flex items-center gap-2 text-sm text-zinc-500"><Spinner /> Checking Spotify…</div>;
+  if (!me && flag === "unconfigured") return (
+    <p className="rounded-2xl border border-amber-300/20 bg-amber-300/5 px-4 py-3 text-sm text-amber-100" data-testid="spotify-unconfigured">
+      Spotify isn&apos;t set up on this server yet. Add <code>SPOTIFY_CLIENT_ID</code>, <code>SPOTIFY_CLIENT_SECRET</code> and <code>SPOTIFY_REDIRECT_URI</code> in Vercel, then redeploy. YouTube works without it.
+    </p>
+  );
   if (!me) return (
     <a href={`/api/auth/spotify/login?return=${encodeURIComponent(returnTo)}`} className="inline-flex h-12 items-center gap-2 rounded-full bg-[#1DB954] px-6 text-[15px] font-medium text-black transition hover:brightness-110 active:scale-[0.97]">
       Connect Spotify
