@@ -7,12 +7,14 @@
     "start": "next start",
     "lint": "eslint",
     "e2e": "next build && playwright test",
-    "e2e:prod": "playwright test --project=prod"
+    "e2e:prod": "playwright test --project=prod",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.117.3",
-    "next": "16.4.0",
+    "geist": "1.9.2",
+    "next": "16.4.6",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
@@ -23,11 +25,11 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.4.0",
+    "eslint-config-next": "16.4.6",
     "tailwindcss": "^4",
     "typescript": "^5"
   },
-  "description": "MyRJ: a personal AI radio jockey that talks between your Spotify or YouTube songs. Self-hosted, with Claude-written RJ lines and Azure voice.",
+  "description": "MyRJ: a personal AI radio jockey that talks between your Spotify or YouTube songs. Self-hosted, free-tier friendly: Gemini-written RJ lines and neural voice, with template and device-voice fallbacks.",
   "license": "MIT",
   "author": "Abhishek Lonkar",
   "repository": {
@@ -47,7 +49,9 @@
     "youtube",
     "tts",
     "claude",
-    "self-hosted"
+    "self-hosted",
+    "gemini",
+    "pwa"
   ],
   "engines": {
     "node": ">=20"

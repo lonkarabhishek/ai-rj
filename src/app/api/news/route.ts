@@ -1,9 +1,11 @@
+import { guard, oneOf, str } from "@/lib/guard";
 import { fetchHeadlines } from "@/lib/news";
-import type { Language } from "@/lib/prefs";
+import { LANGUAGES, type Language } from "@/lib/prefs";
 
 export async function GET(req: Request) {
+  const no = guard(req, "news", 20); if (no) return no;
   const u = new URL(req.url);
-  const topics = (u.searchParams.get("topics") ?? "AI").split(",").map((s) => s.trim()).filter(Boolean);
-  const lang = (u.searchParams.get("lang") ?? "english") as Language;
+  const topics = str(u.searchParams.get("topics") ?? "AI", 300).split(",").map((s) => s.trim().slice(0, 40)).filter(Boolean).slice(0, 5);
+  const lang = oneOf<Language>(u.searchParams.get("lang"), LANGUAGES.map((l) => l.id), "english");
   return Response.json({ headlines: await fetchHeadlines(topics, lang) });
 }

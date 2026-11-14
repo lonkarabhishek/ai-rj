@@ -11,7 +11,7 @@ export default defineConfig({
   retries: 0,
   reporter: [["list"], ["html", { open: "never", outputFolder: "tests/e2e/.report" }]],
   outputDir: "tests/e2e/.results",
-  use: { baseURL: `http://localhost:${PORT}`, screenshot: "only-on-failure", trace: "retain-on-failure", launchOptions: { args: ["--autoplay-policy=user-gesture-required"] } },
+  use: { baseURL: `http://localhost:${PORT}`, screenshot: "only-on-failure", trace: "retain-on-failure", launchOptions: { args: ["--autoplay-policy=user-gesture-required"], ...(process.env.PW_CHROME ? { executablePath: process.env.PW_CHROME } : {}) } },
   projects: [
     { name: "mobile", testIgnore: /prod\.spec/, use: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, userAgent: IPHONE_UA } },
     { name: "desktop", testIgnore: /prod\.spec|api\.spec/, use: { viewport: { width: 1280, height: 800 } } },
@@ -19,7 +19,7 @@ export default defineConfig({
   ],
   webServer: [
     { command: `npx next start -p ${PORT}`, port: PORT, reuseExistingServer: true, timeout: 60_000 },
-    // Second server with a broken Claude key: exercises the template fallback for real.
-    { command: `ANTHROPIC_API_KEY=invalid npx next start -p 3124`, port: 3124, reuseExistingServer: true, timeout: 60_000 },
+    // Second server with broken AI keys (Gemini and Claude): exercises the template fallback for real. GEMINI_API_BASE points at a closed port so nothing leaves the machine.
+    { command: `GEMINI_API_KEY=invalid GEMINI_API_BASE=http://127.0.0.1:9 ANTHROPIC_API_KEY=invalid npx next start -p 3124`, port: 3124, reuseExistingServer: true, timeout: 60_000 },
   ],
 });

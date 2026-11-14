@@ -1,13 +1,20 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // YouTube as a playback source (server side). Quota-aware: list calls cost 1 unit, search costs 100.
+import { extractJson, llmAvailable, llmTask } from "@/lib/llm";
 import { readYoutubePlaylist, youtubeListId } from "@/lib/linkimport";
 
 export interface YtVideo { id: string; title: string; channel: string; seconds: number; image?: string; audioLang?: string; topic?: boolean; lang?: string; src?: "like" | "playlist" | "link" }
 
 async function yt<T>(path: string, token: string | null): Promise<T> {
   const key = process.env.YOUTUBE_API_KEY;
-  const url = `https://www.googleapis.com/youtube/v3/${path}${!token && key ? `&key=${key}` : ""}`;
-  const r = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(10000) });
-  if (!r.ok) throw new Error(`YouTube ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  // The API key travels in a header (never in the URL, so it can't end up in logs or error text).
+  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : key ? { "X-goog-api-key": key } : {};
+  const r = await fetch(`https://www.googleapis.com/youtube/v3/${path}`, { headers, signal: AbortSignal.timeout(10000) });
+  if (!r.ok) {
+    const body = (await r.text().catch(() => "")).slice(0, 600);
+    const reason = body.match(/"reason"\s*:\s*"([A-Za-z]+)"/)?.[1] ?? "";
+    throw new Error(/quota|rateLimit/i.test(reason + body) ? "YouTube API quota used up for today" : `YouTube ${r.status}${reason ? ` (${reason})` : ""}`);
+  }
   return r.json() as Promise<T>;
 }
 const iso = (d = "") => { const m = d.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/); return m ? (+(m[1] ?? 0)) * 3600 + (+(m[2] ?? 0)) * 60 + (+(m[3] ?? 0)) : 0; };
@@ -49,27 +56,17 @@ export async function ytPool(token: string): Promise<YtVideo[]> {
   return tagLangs(vids);
 }
 
-const LANGS = ["english", "hindi", "punjabi", "marathi", "tamil", "telugu"];
-/** One Claude Haiku call labels each song's sung language (strict filter needs a positive signal; titles rarely carry one). Unknown stays unlabelled. */
+const LANGS = ["english", "hindi", "spanish", "punjabi", "marathi", "tamil", "telugu"];
+/** One LLM call (Gemini free tier, else Claude) labels each song's sung language (strict filter needs a positive signal; titles rarely carry one). Unknown stays unlabelled. */
 export async function tagLangs(vids: YtVideo[]): Promise<YtVideo[]> {
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (!key || !vids.length) return vids;
+  if (!llmAvailable() || !vids.length) return vids;
   const out = vids.map((v) => ({ ...v }));
   for (let i = 0; i < out.length; i += 150) {
     const chunk = out.slice(i, i + 150);
-    try {
-      const r = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", signal: AbortSignal.timeout(25000),
-        headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-        body: JSON.stringify({ model: process.env.ANTHROPIC_MODEL || "claude-haiku-5-5", max_tokens: 4096, thinking: { type: "disabled" },
-          messages: [{ role: "user", content: `For each YouTube song below (index|title|channel), give the language its vocals are sung in: one of ${LANGS.join(", ")}, "instrumental", "other", or "unknown" if you are not confident. Return ONLY a JSON object mapping index to label.\n\n${chunk.map((v, k) => `${k}|${v.title}|${v.channel}`).join("\n")}` }] }),
-      });
-      if (!r.ok) continue;
-      const j = await r.json();
-      const t = (j.content ?? []).filter((c: { type: string }) => c.type === "text").map((c: { text: string }) => c.text).join("");
-      const m = JSON.parse(t.slice(t.indexOf("{"), t.lastIndexOf("}") + 1) || "{}") as Record<string, string>;
-      chunk.forEach((v, k) => { const l = String(m[k] ?? "").toLowerCase(); if (LANGS.includes(l) || l === "instrumental" || l === "other") v.lang = l; });
-    } catch { /* unlabelled → falls back to title/channel signals */ }
+    const r = await llmTask(`For each YouTube song below (index|title|channel), give the language its vocals are sung in: one of ${LANGS.join(", ")}, "instrumental", "other", or "unknown" if you are not confident. Return ONLY a JSON object mapping index to label.\n\n${chunk.map((v, k) => `${k}|${v.title}|${v.channel}`).join("\n")}`, { maxTokens: 4096, timeoutMs: 25000, json: true });
+    if (!r) continue; // unlabelled: falls back to title/channel signals
+    const m = extractJson<Record<string, string>>(r.text, "object", {});
+    chunk.forEach((v, k) => { const l = String(m[k] ?? "").toLowerCase(); if (LANGS.includes(l) || l === "instrumental" || l === "other") v.lang = l; });
   }
   return out;
 }

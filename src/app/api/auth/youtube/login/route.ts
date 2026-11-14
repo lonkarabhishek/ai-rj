@@ -14,6 +14,6 @@ export async function GET(req: NextRequest) {
   });
   const res = NextResponse.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${q}`);
   res.cookies.set("yt_state", state, { ...cookieOpts(), maxAge: 600 });
-  res.cookies.set("yt_return", back.startsWith("/") && !back.startsWith("//") ? back : "/settings", { ...cookieOpts(), maxAge: 600 });
+  res.cookies.set("yt_return", /^\/(?!\/)[a-z0-9/_?=&%.-]*$/i.test(back) ? back : "/settings", { ...cookieOpts(), maxAge: 600 });
   return res;
 }

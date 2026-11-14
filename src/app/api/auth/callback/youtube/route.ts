@@ -6,7 +6,8 @@ import { googleToken, ytRedirect } from "@/lib/youtube";
 
 export async function GET(req: NextRequest) {
   const u = new URL(req.url);
-  const back = req.cookies.get("yt_return")?.value ?? "/settings";
+  const saved = req.cookies.get("yt_return")?.value ?? "";
+  const back = /^\/(?!\/)[a-z0-9/_?=&%.-]*$/i.test(saved) ? saved : "/settings"; // same-site path only (never an open redirect)
   const sep = back.includes("?") ? "&" : "?";
   const code = u.searchParams.get("code");
   if (!code || u.searchParams.get("state") !== req.cookies.get("yt_state")?.value) return NextResponse.redirect(`${u.origin}${back}${sep}youtube=error`);
@@ -22,7 +23,7 @@ export async function GET(req: NextRequest) {
     }
     return res;
   } catch (e) {
-    console.error("youtube callback", e);
+    console.error("youtube callback", e instanceof Error ? e.message : "error");
     return NextResponse.redirect(`${u.origin}${back}${sep}youtube=error`);
   }
 }

@@ -12,9 +12,9 @@ export const ytRedirect = (origin: string) => process.env.GOOGLE_REDIRECT_URI ||
 export async function googleToken(params: Record<string, string>) {
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ client_id: process.env.GOOGLE_CLIENT_ID!, client_secret: process.env.GOOGLE_CLIENT_SECRET!, ...params }),
+    body: new URLSearchParams({ client_id: process.env.GOOGLE_CLIENT_ID!, client_secret: process.env.GOOGLE_CLIENT_SECRET!, ...params }), signal: AbortSignal.timeout(10000),
   });
-  if (!res.ok) throw new Error(`Google token error ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  if (!res.ok) throw new Error(`Google token error ${res.status}`); // status only: never echo Google's response (it can quote the request)
   return (await res.json()) as { access_token: string; expires_in: number; refresh_token?: string; scope?: string };
 }
 
@@ -33,8 +33,8 @@ export async function ytAccessToken(): Promise<string | null> {
 
 type Snip = { title: string; videoOwnerChannelTitle?: string; channelTitle?: string; categoryId?: string };
 async function yt<T>(token: string, path: string): Promise<T> {
-  const r = await fetch(`https://www.googleapis.com/youtube/v3/${path}`, { headers: { Authorization: `Bearer ${token}` } });
-  if (!r.ok) throw new Error(`YouTube ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const r = await fetch(`https://www.googleapis.com/youtube/v3/${path}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10000) });
+  if (!r.ok) { const body = (await r.text().catch(() => "")).slice(0, 600); throw new Error(/quota|rateLimit/i.test(body) ? "YouTube API quota used up for today" : `YouTube ${r.status}`); }
   return r.json() as Promise<T>;
 }
 

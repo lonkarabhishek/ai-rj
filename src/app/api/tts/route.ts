@@ -1,40 +1,53 @@
-import { azureEnabled, azureTts, defaultAzureVoice, elevenEnabled, elevenTts, isAzureId, TtsError, type Mood } from "@/lib/tts";
-import { romanticVoice, type Energy, type Language, type ListenMode } from "@/lib/prefs";
+import { guard, oneOf, readJson, str } from "@/lib/guard";
+import { azureEnabled, azureTts, defaultAzureVoice, elevenEnabled, elevenTts, geminiTts, isAzureId, localEnabled, localTts, TtsError, voiceProvider, type Mood, type TtsProvider } from "@/lib/tts";
+import { geminiTtsEnabled } from "@/lib/gemini";
+import { ENERGIES, LANGUAGES, MODES, ROMANTIC_MODES, romanticVoice, type ListenMode } from "@/lib/prefs";
 
+export const maxDuration = 30;
 const EL_DEFAULT = "21m00Tcm4TlvDq8ikWAM"; // ElevenLabs premade "Rachel", present on every account
+const ALL_MODES = [...MODES.map((m) => m.id), ...ROMANTIC_MODES.map((m) => m.id)] as ListenMode[];
+/** Free first: Gemini's neural voice, then your own voice server, then the optional paid-capable providers. */
+const ORDER: TtsProvider[] = ["gemini", "local", "azure", "elevenlabs"];
 
 /**
- * Provider chain: the chosen voice's provider first, then the other one, else 502 (client falls back to the browser voice).
+ * Provider chain: the chosen voice's provider first, then the rest in ORDER, else 502 (the client falls back to the device's own voice).
  * Response header X-TTS-Provider says who spoke; X-TTS-Fallback lists failures along the way.
  */
 export async function POST(req: Request) {
-  const { text, voiceId: reqVoice, energy = "balanced", mode = "default", language = "english", mood } =
-    (await req.json()) as { text: string; voiceId?: string; energy?: Energy; mode?: ListenMode; language?: Language; mood?: Mood };
-  if (!text) return Response.json({ error: "text required" }, { status: 400 });
-  const voiceId = romanticVoice(mode) ?? reqVoice; // Romantic Hindi sessions always use their own voice (this session only)
-  const clean = String(text).slice(0, 1500);
+  const no = guard(req, "tts", 60); if (no) return no;
+  const b = await readJson(req, 20_000);
+  const clean = str(b?.text, 1500).trim();
+  if (!b || !clean) return Response.json({ error: "text required" }, { status: 400 });
+  const energy = oneOf(b.energy, ENERGIES, "balanced");
+  const mode = oneOf(b.mode, ALL_MODES, "default");
+  const language = oneOf(b.language, LANGUAGES.map((l) => l.id), "english");
+  const mood = oneOf<Mood | "">(b.mood, ["hype", "cheerful", "warm", "calm"], "") || undefined;
+  const voiceId = romanticVoice(mode) ?? str(b.voiceId, 120); // Romantic Hindi sessions always use their own voice (this session only)
+  const chosen = voiceProvider(voiceId);
 
-  const attempts: { provider: string; run: () => Promise<ArrayBuffer> }[] = [];
   const azureVoice = voiceId && isAzureId(voiceId) ? voiceId : defaultAzureVoice(romanticVoice(mode) ? "hindi" : language);
-  const elVoice = voiceId && !isAzureId(voiceId) ? voiceId : EL_DEFAULT;
-  const azure = { provider: "azure", run: () => azureTts(clean, azureVoice, energy, mode, mood) };
-  const eleven = { provider: "elevenlabs", run: () => elevenTts(clean, elVoice, energy) };
-  if (voiceId && !isAzureId(voiceId)) attempts.push(eleven, azure); else attempts.push(azure, eleven);
+  const run: Record<TtsProvider, { on: boolean; go: () => Promise<{ audio: ArrayBuffer; mime: string }> }> = {
+    gemini: { on: geminiTtsEnabled(), go: () => geminiTts(clean, voiceId, energy, mode, mood) },
+    local: { on: localEnabled(), go: () => localTts(clean, voiceId, romanticVoice(mode) ? "hindi" : language, mood) },
+    azure: { on: azureEnabled(), go: async () => ({ audio: await azureTts(clean, azureVoice, energy, mode, mood), mime: "audio/mpeg" }) },
+    elevenlabs: { on: elevenEnabled(), go: async () => ({ audio: await elevenTts(clean, chosen === "elevenlabs" ? voiceId : EL_DEFAULT, energy), mime: "audio/mpeg" }) },
+  };
+  const order = chosen ? [chosen, ...ORDER.filter((p) => p !== chosen)] : ORDER;
 
   const failures: string[] = [];
-  for (const a of attempts) {
-    if (a.provider === "azure" && !azureEnabled()) { failures.push("azure:not_configured"); continue; }
-    if (a.provider === "elevenlabs" && !elevenEnabled()) { failures.push("elevenlabs:not_configured"); continue; }
+  for (const p of order) {
+    if (!run[p].on) { failures.push(`${p}:not_configured`); continue; }
     try {
-      const audio = await a.run();
-      return new Response(audio, { headers: { "Content-Type": "audio/mpeg", "Cache-Control": "no-store", "X-TTS-Provider": a.provider, "X-TTS-Fallback": failures.join(",") } });
+      const { audio, mime } = await run[p].go();
+      return new Response(audio, { headers: { "Content-Type": mime, "Cache-Control": "no-store", "X-TTS-Provider": p, "X-TTS-Fallback": failures.filter((f) => !f.endsWith("not_configured")).join(",") } });
     } catch (e) {
-      failures.push(e instanceof TtsError ? `${e.provider}:${e.code}` : `${a.provider}:error`);
+      failures.push(e instanceof TtsError ? `${e.provider}:${e.code}` : `${p}:error`);
     }
   }
+  const configured = order.some((p) => run[p].on);
   const quota = failures.some((f) => f.endsWith("quota_exceeded"));
   return Response.json({
-    error: quota && !azureEnabled() ? "ElevenLabs credits used up and Azure Speech isn't set up" : "No voice provider could speak",
-    code: quota ? "quota_exceeded" : "all_failed", failures,
+    error: !configured ? "No voice service is set up on this server" : quota ? "The free voice allowance is used up for now" : "No voice provider could speak",
+    code: !configured ? "not_configured" : quota ? "quota_exceeded" : "all_failed", failures,
   }, { status: 502 });
 }

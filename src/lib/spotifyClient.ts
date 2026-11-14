@@ -231,6 +231,7 @@ let audioFeaturesOk: boolean | null = null; // Spotify blocks audio-features for
 const LANG_TERMS: Record<Exclude<SongLang, "any">, { q: string[]; genre: string[]; focus: string[] }> = {
   hindi: { q: ["bollywood", "hindi songs", "arijit singh", "bollywood hits", "hindi indie"], genre: ["filmi", "bollywood"], focus: ["bollywood instrumental", "hindi lofi instrumental", "bollywood flute instrumental", "bollywood piano"] },
   english: { q: ["pop hits", "indie pop", "english hits", "r&b", "alt rock"], genre: ["pop", "indie pop"], focus: ["lofi beats", "piano instrumental", "ambient instrumental", "post-rock instrumental"] },
+  spanish: { q: ["latin pop", "exitos en español", "reggaeton", "rock en español", "baladas en español"], genre: ["latin pop", "reggaeton", "latin rock"], focus: ["spanish guitar instrumental", "latin jazz instrumental", "bossa nova instrumental"] },
   punjabi: { q: ["punjabi", "punjabi hits", "desi hip hop", "punjabi pop", "diljit dosanjh"], genre: ["punjabi pop", "desi hip hop"], focus: ["punjabi instrumental", "punjabi lofi instrumental"] },
   marathi: { q: ["marathi songs", "marathi hits", "marathi pop", "ajay atul"], genre: ["marathi pop"], focus: ["marathi instrumental", "marathi flute instrumental"] },
   tamil: { q: ["tamil songs", "tamil hits", "kollywood", "anirudh ravichander"], genre: ["tamil pop", "kollywood"], focus: ["tamil instrumental", "tamil bgm", "ilaiyaraaja instrumental"] },
@@ -238,6 +239,7 @@ const LANG_TERMS: Record<Exclude<SongLang, "any">, { q: string[]; genre: string[
 };
 const LANG_GENRE_RE: Record<string, RegExp> = {
   hindi: /bollywood|filmi|hindi|hindustani|indian pop|sufi|ghazal/i,
+  spanish: /latin|reggaeton|spanish|español|mexican|bachata|salsa|cumbia|banda|corrido|ranchera|mariachi|flamenco|urbano|tropical|norte[nñ]o|vallenato|merengue/i,
   punjabi: /punjabi|bhangra|desi hip hop|desi pop/i,
   marathi: /marathi|lavani/i,
   tamil: /tamil|kollywood/i,
@@ -275,6 +277,7 @@ export class Curator {
       for (const [l, re] of Object.entries(LANG_GENRE_RE)) if (re.test(gs)) found.add(l);
       if (found.has("hindi") && /marathi|lavani/i.test(gs)) found.add("marathi");
       if (this.langs.some((l) => found.has(l))) return true;
+      if (found.has("spanish") && !this.langs.includes("spanish") && found.size === 1) return false; // a Latin track is not an English one
       if (this.langs.includes("english") && !found.size && !INDIC_RE.test(gs) && !/[\u0900-\u0DFF]/.test(text)) return g.length > 0 || trusted;
       if (this.genresDown && !found.size && !g.length) return true; // can't tell: don't drop the listener's own songs
       return trusted && !found.size && !g.length; // no signal at all: only trust language-search results

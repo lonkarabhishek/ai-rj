@@ -38,6 +38,21 @@ MyRJ is a personal AI radio station. Pick a mode, tap **Go Live**, and your RJ t
   <tr><td colspan="3" align="center"><img src="docs/start-desktop.png" alt="MyRJ on desktop" width="660"><br><sub>Desktop</sub></td></tr>
 </table>
 
+## Free personal setup (Gemini, $0 a month)
+
+This copy is set up to run as a personal radio with no monthly cost:
+
+- **AI DJ:** Google Gemini's free tier writes the breaks (`GEMINI_API_KEY`, server-side only). If Gemini is down, slow or out of quota, the built-in template lines take over and the radio keeps playing.
+- **Voice:** Gemini's neural voices first (small free daily allowance), then your own voice server if you run one, then the device's built-in voice. Azure Speech and ElevenLabs still work if you add their keys, but nothing paid is required.
+- **Languages:** English and Spanish, plus the original Hindi, Hinglish and Marathi.
+- **Music:** Spotify and YouTube, exactly as before.
+- **Phone:** frosted-glass player with a thumb-reach dock, installable to the iPhone home screen (Share → Add to Home Screen).
+
+Start here: **[docs/FREE-SETUP.md](docs/FREE-SETUP.md)** (every environment variable, redirect URLs, Vercel steps, free-tier limits) and **[docs/VOICES.md](docs/VOICES.md)** (voice options compared, what is implemented, how to run your own voice server).
+
+Minimum useful setup: `GEMINI_API_KEY` + either Spotify or Google/YouTube keys. Everything below about Claude and Azure still applies if you choose to use them; with several keys set the order is Gemini → Claude → OpenAI-compatible → templates.
+
+
 ## Features
 
 - **Modes:** My Mix, Gym, Driving and Focus (Focus plays only non-lyrical music).
@@ -45,10 +60,10 @@ MyRJ is a personal AI radio station. Pick a mode, tap **Go Live**, and your RJ t
 - **Languages:** the RJ speaks Hindi, English, Hinglish or Marathi. You also choose which languages your *songs* are in, and YouTube picks are strictly filtered to them.
 - **Music sources:** **Spotify** (Web Playback SDK on desktop, Spotify Connect on phones) and **YouTube** (embedded player, ad-free with YouTube Premium). YouTube mode skips albums, compilations, reactions and live streams.
 - **Talks about what you want:** toggle news, jokes and song facts per session, or go "just music".
-- **Voice:** Azure Speech (free tier friendly), optional ElevenLabs, browser speech as a fallback. Soft background intro/outro music and music ducking while the RJ talks.
+- **Voice:** Gemini neural voices on the free tier, optional self-hosted voice server, Azure Speech or ElevenLabs, and the device's own voice as a fallback. Soft background intro/outro music and music ducking while the RJ talks.
 - **Mascot:** a small animated pill-shaped robot that glances at you, reacts to taps and "speaks" along with the RJ.
 - **Synced lyrics** display, lock-screen / headphone controls (MediaSession), and a single playback state machine so play/pause is dependable.
-- **Your taste:** seeds from your Spotify and YouTube likes and playlists, or import links and screenshots (read with Claude).
+- **Your taste:** seeds from your Spotify and YouTube likes and playlists, or import links and screenshots (read with Gemini, or Claude if you use it).
 - **Accounts are optional:** with Supabase you get Google / magic-link sign-in and sync across devices. Without it, everything stays in your browser.
 
 ## Quickstart (about 10 minutes)

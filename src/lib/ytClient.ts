@@ -25,11 +25,12 @@ const SCRIPT: [SongLang, RegExp][] = [["tamil", /[\u0B80-\u0BFF]/], ["telugu", /
 const WORDS: [SongLang, RegExp][] = [
   ["punjabi", /\bpunjabi\b|diljit|sidhu moose|karan aujla|ap dhillon|ammy virk|guru randhawa|bhangra/i],
   ["marathi", /\bmarathi\b|ajay[- ]atul|lavani/i],
+  ["spanish", /\bespañol\b|\bspanish\b|\blatin[oa]?\b|reggaet[oó]n|bachata|\bsalsa\b|cumbia|\bbanda\b|corridos?|ranchera|mariachi|bad bunny|shakira|karol g|j balvin|daddy yankee|luis miguel|juanes|man[aá]\b|peso pluma|rosal[ií]a|[¿¡ñ]/i],
   ["tamil", /\btamil\b|kollywood|anirudh|ilaiyaraaja/i],
   ["telugu", /\btelugu\b|tollywood|devi sri prasad|\bdsp\b|aditya music|lahari/i],
   ["hindi", /\bhindi\b|bollywood|t-series|arijit|zee music company|\byrf\b|tips official|saregama music|shreya ghoshal|atif aslam|pritam/i],
 ];
-const AUDIO: Record<string, SongLang> = { en: "english", hi: "hindi", pa: "punjabi", mr: "marathi", ta: "tamil", te: "telugu" };
+const AUDIO: Record<string, SongLang> = { en: "english", es: "spanish", hi: "hindi", pa: "punjabi", mr: "marathi", ta: "tamil", te: "telugu" };
 
 /** Strict: a specific language must be positively signalled; uncertain videos are dropped. */
 export function videoLang(v: Tagged): { lang: SongLang | null; sure: boolean } {
@@ -59,6 +60,7 @@ export function matchesLangs(v: Tagged, langs: SongLang[]) {
 const LQ: Record<Exclude<SongLang, "any">, { q: string[]; focus: string }> = {
   hindi: { q: ["new hindi songs", "bollywood hits", "arijit singh songs", "hindi romantic songs"], focus: "bollywood instrumental flute" },
   english: { q: ["english pop hits", "top english songs", "indie pop songs", "english acoustic songs"], focus: "piano instrumental study" },
+  spanish: { q: ["latin pop hits", "canciones en español", "reggaeton hits", "rock en español", "baladas románticas en español"], focus: "spanish guitar instrumental" },
   punjabi: { q: ["punjabi hit songs", "new punjabi songs"], focus: "punjabi instrumental" },
   marathi: { q: ["marathi songs", "ajay atul songs"], focus: "marathi instrumental flute" },
   tamil: { q: ["tamil hit songs", "anirudh songs"], focus: "tamil bgm instrumental" },
