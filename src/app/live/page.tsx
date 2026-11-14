@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { AUTO_VOICE, BROWSER_VOICE, effectiveSongLangs, isOnboarded, isRomantic, loadPrefs, modeInfo, MODES, ROMANTIC_MODES, romanticVoice, savePrefs, SPEECH_LANG, type ListenMode, type Prefs, type TrackInfo } from "@/lib/prefs";
+import { AUTO_VOICE, BROWSER_VOICE, vibeQueries, VIBE_TAGS, type Steer, effectiveSongLangs, isOnboarded, isRomantic, loadPrefs, modeInfo, MODES, ROMANTIC_MODES, romanticVoice, savePrefs, SPEECH_LANG, type ListenMode, type Prefs, type TrackInfo } from "@/lib/prefs";
 import { clearSpotifyBackoff, Curator, getMe, limitedEndpoint, quotaExceeded, getToken, getTokenInfo, sp, spotifyBackoffMs, SpotifyError } from "@/lib/spotifyClient";
 import { AllPrefs, MusicSourcePicker, SongLangPicker, TalkToggles, usePrefs } from "@/components/prefs";
 import { YtCurator, YtPlayer, ytConnected, type YtState } from "@/lib/ytClient";
@@ -11,6 +11,10 @@ import { stripTags } from "@/lib/text";
 import { cx } from "@/components/ui";
 import { loadVoices, speakText, type SpeechMood } from "@/lib/browserVoice";
 import { Visualizer } from "@/components/Visualizer";
+import { ArtStage, FallbackArt, TrackTitle, type Dir } from "@/components/ArtStage";
+import { LyricsView } from "@/components/LyricsView";
+import { DiscoverPanel, LibraryPanel, MiniPlayer, Sheet } from "@/components/Sheets";
+import { getArt, trackKey, type Art } from "@/lib/artwork";
 import { Lyrics } from "@/components/Lyrics";
 import { Mascot } from "@/components/Mascot";
 
@@ -18,12 +22,12 @@ const SILENT_WAV = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAAC
 declare global { interface Window { Spotify: any; onSpotifyWebPlaybackSDKReady: () => void } }
 
 type Out = "sdk" | "connect" | "youtube" | "preview" | "none";
-type AnyCurator = { next(): Promise<TrackInfo | null>; peek(): TrackInfo | null };
+type AnyCurator = { next(): Promise<TrackInfo | null>; peek(): TrackInfo | null; steer?(s: Steer): Promise<TrackInfo | null>; pushFront?(...t: TrackInfo[]): void; upcoming?(n?: number): TrackInfo[] };
 type Phase = "idle" | "tuning" | "rj" | "song" | "waiting" | "recovering";
 interface Diag { account?: string; product?: string; scopes?: string; sdk?: string; device?: string; output?: string; error?: string; timings?: string; breaks?: string; voice?: string; script?: string; audio?: string; log?: string[] }
 type BreakKind = "none" | "stinger" | "full" | "switch";
 type SegType = "vibe" | "story" | "trivia_q" | "trivia_a" | "hot_take" | "callback" | "dedication" | "sensual_story";
-interface Plan { kind: BreakKind; withNews?: boolean; withJoke?: boolean; segment?: SegType }
+interface Plan { kind: BreakKind; withNews?: boolean; withJoke?: boolean; segment?: SegType; request?: string }
 // Show bits for full breaks, rotated so the same one never runs twice in a row (trivia answers are scheduled, not drawn).
 const SEG_BAG: SegType[] = ["story", "vibe", "hot_take", "trivia_q", "callback", "dedication", "story", "vibe"];
 interface Segment { script: string; audioUrl: string | null; lang: string; kind: BreakKind; dur?: number; story?: boolean; mood?: SpeechMood } // dur: voice clip length in seconds; story: a 30-60s sensual story (gets the gap to itself)
@@ -62,6 +66,27 @@ function LiveInner() {
   const [drawer, setDrawer] = useState(false);
   const [needReconnect, setNeedReconnect] = useState(false);
   const [speaking, setSpeaking] = useState(false);
+  // ---- Now Playing extras: cover art, swipe direction, lyrics, sheets, requests ----
+  const [art, setArt] = useState<Art | null>(null);
+  const [dir, setDir] = useState<Dir>(0);
+  const dirRef = useRef<Dir>(1);
+  const [lyricsOpen, setLyricsOpen] = useState(false);
+  const lyricsOpenRef = useRef(false); useEffect(() => { lyricsOpenRef.current = lyricsOpen; }, [lyricsOpen]);
+  const [sheet, setSheet] = useState<null | "discover" | "library">(null);
+  const [reqBusy, setReqBusy] = useState(false);
+  const [reqMsg, setReqMsg] = useState<string | null>(null);
+  const [upcoming, setUpcoming] = useState<TrackInfo[]>([]);
+  const [vol, setVol] = useState(1);
+  const volRef = useRef(1); // listener's own volume (desktop players we control); fades scale under it
+  const injectRef = useRef<TrackInfo[]>([]); // play these next, ahead of the curator (requests, previous)
+  const steerGenRef = useRef(0); // bumped by every new request/previous/station change, so each one is applied exactly once
+  const refreshNextRef = useRef(false);      // the vibe changed: the already-picked next song is dropped
+  const requestNoteRef = useRef<string | null>(null); // what the listener asked for, for the DJ to acknowledge once
+  const pendingSteerRef = useRef<Steer | null>(null); // a request made before going live
+  const playedRef = useRef<TrackInfo[]>([]);
+  const nowRef = useRef<TrackInfo | null>(null);
+  const songClockRef = useRef<(() => number | null) | null>(null); // the real playback position (seconds) of the current song
+  const songClock = useCallback((): number | null => songClockRef.current?.() ?? null, []);
   const voiceClockRef = useRef<(() => [number, number]) | null>(null);
   const clock = useCallback((): [number, number] => voiceClockRef.current?.() ?? [0, 0], []);
 
@@ -77,6 +102,7 @@ function LiveInner() {
   const pausedRef = useRef(false);
   const appliedPauseRef = useRef(false);
   const ctlBusyRef = useRef(false);
+  const lastTapRef = useRef(0); // last play/pause tap, for the remote-device debounce
   const musicActiveRef = useRef(false); // a Spotify song is loaded and should resume on play
   const voicePausedRef = useRef(false);
   const playerRef = useRef<any>(null);
@@ -102,7 +128,7 @@ function LiveInner() {
   const ytNoDuck = () => typeof window !== "undefined" && (!!(window as any).__noDuck || /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
   const canDuck = () => outRef.current === "sdk" || (outRef.current === "youtube" && !ytNoDuck());
   const mkCurator = (m: ListenMode): AnyCurator => outRef.current === "youtube"
-    ? new YtCurator(m, effectiveSongLangs(m, loadPrefs().songLangs), (loadPrefs().externalPlaylists ?? []).map((x) => x.url), loadPrefs().tasteSeeds ?? [])
+    ? new YtCurator(m, effectiveSongLangs(m, loadPrefs().songLangs), (loadPrefs().externalPlaylists ?? []).map((x) => x.url), loadPrefs().tasteSeeds ?? [], isRomantic(m) ? [] : vibeQueries(loadPrefs().vibeTags), loadPrefs().station ?? null)
     : new Curator(m, loadPrefs().tasteSeeds ?? [], effectiveSongLangs(m, loadPrefs().songLangs));
   const recentRef = useRef<string[]>([]);
   const ttsQuotaRef = useRef(0); // until when the neural voice is resting (free allowance used up): the device voice covers meanwhile
@@ -229,16 +255,28 @@ function LiveInner() {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Cover art for the current song (and a warm-up fetch for the next one), with the ambient colour for the background.
+  useEffect(() => {
+    if (!now) { setArt(null); return; }
+    let off = false;
+    getArt(now).then((a) => { if (!off) setArt(a); });
+    return () => { off = true; };
+  }, [now]);
+  useEffect(() => { if (upNext) getArt(upNext).catch(() => {}); }, [upNext]);
+  useEffect(() => { if (sheet === "library") setUpcoming(curatorRef.current?.upcoming?.(8) ?? []); }, [sheet, upNext]);
+
   // Lock-screen / headphone controls + space bar
   useEffect(() => {
     const ms = "mediaSession" in navigator ? navigator.mediaSession : null;
     if (ms) {
       try {
-        const art = now?.image ? [{ src: now.image, sizes: "640x640", type: "image/jpeg" }] : [];
-        ms.metadata = new MediaMetadata(phase === "rj" ? { title: `${prefs.rjName || "Your RJ"} on air`, artist: "MyRJ", artwork: art } : { title: now?.name ?? "MyRJ", artist: now?.artists ?? "", artwork: art });
+        const img = art?.url ?? now?.image;
+        const artList = img ? [{ src: img, sizes: "600x600", type: "image/jpeg" }] : [];
+        ms.metadata = new MediaMetadata(phase === "rj" ? { title: `${prefs.rjName || "Your RJ"} on air`, artist: "MyRJ", artwork: artList } : { title: now?.name ?? "MyRJ", artist: now?.artists ?? "", artwork: artList });
         ms.setActionHandler("play", () => togglePause(false));
         ms.setActionHandler("pause", () => togglePause(true));
         ms.setActionHandler("nexttrack", () => next());
+        ms.setActionHandler("previoustrack", () => previous());
         ms.setActionHandler("stop", () => stop());
       } catch { /* partial support */ }
     }
@@ -250,7 +288,7 @@ function LiveInner() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [now, phase, prefs.rjName]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [now, phase, prefs.rjName, art]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (prefs.music !== "youtube" || !ytHostRef.current) return;
@@ -326,7 +364,12 @@ function LiveInner() {
     ctlBusyRef.current = true;
     try {
       while (appliedPauseRef.current !== pausedRef.current) {
-        const want = pausedRef.current; // applied at once (no debounce delay): rapid taps are coalesced because only the final state is applied after each call
+        if (outRef.current === "connect" && musicActiveRef.current) { // a remote device: let a burst of taps settle into one network call
+          const start = Date.now(); // (voice, YouTube and the in-page player were already handled inside the tap, see togglePause)
+          while (Date.now() - lastTapRef.current < 300 && Date.now() - start < 1200) await sleep(60);
+          if (appliedPauseRef.current === pausedRef.current) break; // tapped back to where we were: nothing to send
+        }
+        const want = pausedRef.current; // only the final state is applied
         try { await applyPause(want); }
         catch (e) {
           log(`${want ? "pause" : "resume"} failed: ${e}`);
@@ -341,7 +384,9 @@ function LiveInner() {
     if (phaseRef.current === "idle" || phaseRef.current === "tuning") return;
     const v = force ?? !pausedRef.current;
     if (v === pausedRef.current) return;
-    setPausedState(v); navigator.vibrate?.(8); runCtl();
+    setPausedState(v); navigator.vibrate?.(8); lastTapRef.current = Date.now();
+    if (outRef.current === "connect") { applyPauseLocal(v); try { if (v) window.speechSynthesis?.pause(); else window.speechSynthesis?.resume(); } catch { /* ignore */ } } // inside the tap's gesture (iOS)
+    runCtl();
   }
   /** External pause/resume (Spotify app, lock screen, headphones) observed while polling. */
   function syncExternal(isPlaying: boolean) {
@@ -356,7 +401,69 @@ function LiveInner() {
   }
   function next() {
     if (pausedRef.current) { setPausedState(false); appliedPauseRef.current = false; applyPauseLocal(false); }
+    dirRef.current = 1;
     skipRef.current();
+  }
+  /** Previous: the song before this one, then back to this one. Early in the first song it restarts it. */
+  function previous() {
+    if (phaseRef.current === "idle" || phaseRef.current === "tuning" || phaseRef.current === "recovering") return;
+    const cur = nowRef.current, list = playedRef.current;
+    const back = list.length >= 2 ? list[list.length - 2] : null;
+    if (!cur && !back) return;
+    playedRef.current = list.slice(0, back ? -2 : -1);
+    injectRef.current = [back, cur].filter((x): x is TrackInfo => !!x); steerGenRef.current++;
+    requestNoteRef.current = null;
+    if (pausedRef.current) { setPausedState(false); appliedPauseRef.current = false; applyPauseLocal(false); }
+    dirRef.current = -1;
+    skipRef.current();
+  }
+  /** Swipe on the cover: left = next song, right = previous song. */
+  function swipe(d: 1 | -1) { log(`swipe ${d === 1 ? "next" : "previous"}`); navigator.vibrate?.(6); if (d === 1) next(); else previous(); }
+  const describe = (s: Steer) => (s.kind === "song" ? `Playing your request: ${s.label}` : s.kind === "artist" ? `More ${s.label} coming up` : `Vibe: ${s.label}`);
+  /** A request (typed or a tag). Live: a named song plays next (now, if a song is on); a mood takes over from the next song. Idle: saved for Go Live. */
+  async function requestSteer(r: { text?: string; tag?: string }) {
+    let st: Steer | null = null;
+    if (r.tag !== undefined) {
+      const t = VIBE_TAGS.find((x) => x.id === r.tag);
+      st = t ? { kind: "mood", label: t.label, queries: t.q, song: null } : null;
+      if (!st) {
+        savePrefs({ ...loadPrefs(), vibeTags: [] }); // tags cleared: back to the normal mix from the next song
+        if (phaseRef.current !== "idle" && outRef.current !== "none") { curatorRef.current = mkCurator(modeRef.current); refreshNextRef.current = true; steerGenRef.current++; }
+        setReqMsg("Back to your mix from the next song."); return;
+      }
+    } else if (r.text) {
+      setReqBusy(true); setReqMsg(null);
+      try {
+        const res = await fetch("/api/request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: r.text, tags: loadPrefs().vibeTags ?? [] }) });
+        const j = await res.json().catch(() => null);
+        if (!res.ok || !j?.queries) { setReqMsg(j?.error ?? "Couldn't take that request. Try again."); return; }
+        st = j as Steer;
+      } catch { setReqMsg("You're offline. Try again in a moment."); return; }
+      finally { setReqBusy(false); }
+    }
+    if (!st) return;
+    log(`request: ${st.kind} "${st.label}"`);
+    if (phaseRef.current === "idle" || !curatorRef.current?.steer) { pendingSteerRef.current = st; setReqMsg(`Saved: ${st.label}. It plays when you go live.`); return; }
+    setReqBusy(true);
+    try {
+      const song = await curatorRef.current.steer(st);
+      if (st.song && !song) setReqMsg(`Couldn't find "${st.label}". Playing similar songs instead.`);
+      else setReqMsg(describe(st));
+      requestNoteRef.current = st.label;
+      setUpcoming(curatorRef.current.upcoming?.(8) ?? []);
+      steerGenRef.current++;
+      if (song) {
+        injectRef.current = [song];
+        if (phaseRef.current === "song" || phaseRef.current === "waiting") { dirRef.current = 1; if (pausedRef.current) { setPausedState(false); appliedPauseRef.current = false; applyPauseLocal(false); } skipRef.current(); }
+      } else refreshNextRef.current = true;
+    } finally { setReqBusy(false); }
+  }
+  function changeStation(id: string | null) {
+    savePrefs({ ...loadPrefs(), station: id }); up("station", id);
+    if (phaseRef.current !== "idle" && outRef.current !== "none") {
+      curatorRef.current = mkCurator(modeRef.current); refreshNextRef.current = true; steerGenRef.current++; setReqMsg(null);
+      setNotice(id ? "Switching station from the next song." : "Back to My Mix from the next song."); setTimeout(() => setNotice(null), 3500);
+    }
   }
 
   /** Idle picker: mode is just the starting mode (remembered as default). */
@@ -449,8 +556,8 @@ function LiveInner() {
   const songVolRef = useRef(SONG_VOL); // last volume we set, so fades don't need a slow getVolume round-trip
   async function setSongVol(v: number) {
     songVolRef.current = v;
-    const y = ytRef.current;
-    if (outRef.current === "youtube" && y) y.setVolume01(v); else await playerRef.current?.setVolume(Math.max(0.0001, v)).catch(() => {});
+    const y = ytRef.current, out = v * volRef.current;
+    if (outRef.current === "youtube" && y) y.setVolume01(out); else await playerRef.current?.setVolume(Math.max(0.0001, out)).catch(() => {});
   }
   async function fadeSdk(to: number, ms: number) {
     const id = ++fadeIdRef.current;
@@ -630,7 +737,7 @@ function LiveInner() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prefs: p, next, prev, index, mode: modeRef.current, recent: recentRef.current.slice(-6), hour: new Date().getHours(), kind: plan.kind, withNews: !!plan.withNews, withJoke: !!plan.withJoke,
-          segment: plan.segment, trivia, history: historyRef.current.slice(-8),
+          segment: plan.segment, trivia, history: historyRef.current.slice(-8), request: plan.request,
           minutes: onAirAtRef.current ? Math.round((Date.now() - onAirAtRef.current) / 60000) : 0,
         }),
       }).then(async (r) => { if (!r.ok) throw new Error(`segment ${r.status} ${(await r.text().catch(() => "")).slice(0, 120)}`); return r.json(); }), 25000, "segment");
@@ -706,9 +813,11 @@ function LiveInner() {
     setDiag({ account: me.display_name, product: me.product });
     if (me.product !== "premium") { setDiag({ output: "previews (Spotify Free)" }); return "preview"; }
 
-    const player = playerRef.current;
     // The Web Playback SDK doesn't run in mobile browsers: don't wait for it there, go straight to Spotify Connect.
     const mobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+    // On desktop the SDK script may still be loading (autostart right after onboarding): give it a few seconds before falling back.
+    for (let t = 0; t < 20 && !mobile && !playerRef.current && !sdkErrRef.current && alive(sid); t++) await sleep(250);
+    const player = playerRef.current;
     if (mobile) setDiag({ sdk: "skipped (mobile browser)" });
     if (player && !sdkErrRef.current && !mobile) {
       setDiag({ sdk: "connecting", error: undefined });
@@ -818,11 +927,12 @@ function LiveInner() {
       if (!st.paused) started = true;
       if (!started && Date.now() - t0 > 10000) throw new Error("song never started");
       if (st.duration) setProgress(st.position / st.duration);
+      { const pos = st.position / 1000, at = Date.now(), still = st.paused; songClockRef.current = () => (still || pausedRef.current ? pos : pos + (Date.now() - at) / 1000); }
       if (started && st.paused && st.position === 0) break;
       const left = st.duration ? st.duration - st.position : Infinity;
       if (!st.paused) volumeGuard(fading, tStart);
       // RJ over the outro, timed from the clip's length so the voice straddles both songs (switch lines wait for the gap)
-      if (!usedOutro && !talkingRef.current && ready?.audioUrl && ready.kind !== "switch" && !ready.story && left <= outroLeadMs(ready) && left > 3000) {
+      if (!usedOutro && !talkingRef.current && !injectRef.current.length && !refreshNextRef.current && ready?.audioUrl && ready.kind !== "switch" && !ready.story && left <= outroLeadMs(ready) && left > 3000) {
         usedOutro = true; talkOver(ready);
       }
       if (talkingRef.current) { if (left <= 700) break; continue; } // keep the bed of music under the voice until the very end
@@ -897,8 +1007,9 @@ function LiveInner() {
       if ((y.state as YtState) !== 1) continue;
       setStatus("");
       if (dur) setProgress(pos / dur);
+      if (!songClockRef.current) songClockRef.current = () => (y.current === t.ytId ? y.time() : null);
       const left = dur ? (dur - pos) * 1000 : Infinity;
-      if (!usedOutro && !talkingRef.current && ready?.audioUrl && ready.kind !== "switch" && !ready.story && canDuck() && left <= outroLeadMs(ready) && left > 3000) { usedOutro = true; talkOver(ready); }
+      if (!usedOutro && !talkingRef.current && !injectRef.current.length && !refreshNextRef.current && ready?.audioUrl && ready.kind !== "switch" && !ready.story && canDuck() && left <= outroLeadMs(ready) && left > 3000) { usedOutro = true; talkOver(ready); }
       if (talkingRef.current) { if (left <= 700) break; continue; }
       if (!fading && left <= 1900 && canDuck()) { fading = true; fadeSdk(0.12, 1500); if (!outro) jingle(); }
       if (left <= 350) break;
@@ -932,7 +1043,8 @@ function LiveInner() {
     let endsAt = t0 + (t.durationMs ?? 240000), first = true;
     while (alive(sid) && !skipped && Date.now() < deadline) {
       // Poll gently: every 10s while visible, 15s while hidden, plus once right at the expected end of the song.
-      const gap = first ? 2500 : Math.min(document.hidden ? 60000 : 30000, Math.max(1200, endsAt - Date.now() - 2000));
+      // Lyrics open: re-read the position every 5s so a seek in the Spotify app is followed (costs a few more API calls only then).
+      const gap = first ? 2500 : Math.min(document.hidden ? 60000 : lyricsOpenRef.current ? 5000 : 30000, Math.max(1200, endsAt - Date.now() - 2000));
       first = false;
       for (const until = Date.now() + gap; Date.now() < until && !skipped && alive(sid);) await sleep(250);
       if (skipped || !alive(sid)) break;
@@ -955,6 +1067,7 @@ function LiveInner() {
       endsAt = Date.now() + left;
       deadline = Math.max(deadline, endsAt + 15000);
       setProgress(st.progress_ms / st.item.duration_ms);
+      { const pos = st.progress_ms / 1000, at = Date.now(), playing = st.is_playing; songClockRef.current = () => (!playing || pausedRef.current ? pos : pos + (Date.now() - at) / 1000); }
       if (st.is_playing && left < 4500) { // near the end: wait it out locally and cut ~0.9s before the last note, not 2.5s early
         for (const until = Date.now() + Math.max(0, left - 900); Date.now() < until && !skipped && alive(sid);) await sleep(100);
         break;
@@ -967,8 +1080,10 @@ function LiveInner() {
 
   /** Returns true if the song played (or was skipped by the user), false on a playback failure. */
   async function playSong(t: TrackInfo, sid: number, over?: Segment | null, outro?: Promise<Segment | null> | null, after?: Promise<TrackInfo | null> | null): Promise<boolean | "outro"> {
-    musicActiveRef.current = true;
-    try { return await playSongInner(t, sid, over, outro, after); } finally { musicActiveRef.current = false; }
+    musicActiveRef.current = true; songClockRef.current = null;
+    setDir(dirRef.current); dirRef.current = 1;
+    nowRef.current = t; playedRef.current = [...playedRef.current, t].slice(-30);
+    try { return await playSongInner(t, sid, over, outro, after); } finally { musicActiveRef.current = false; songClockRef.current = null; }
   }
   /** true = played (or skipped by the listener); "outro" = the next break is used up (spoken over the outro, or Spotify moved on by itself); false = failed. */
   async function playSongInner(t: TrackInfo, sid: number, over?: Segment | null, outro?: Promise<Segment | null> | null, after?: Promise<TrackInfo | null> | null): Promise<boolean | "outro"> {
@@ -1110,6 +1225,26 @@ function LiveInner() {
       p.then(end, () => end(onSkip));
     });
     let loopErrors = 0;
+    /** Listener steering: an injected track (request, previous) or a new vibe replaces the already-picked next song. */
+    const steerNext = async (idx: number) => {
+      if (injectRef.current.length) {
+        const inj = injectRef.current.shift()!;
+        if (next && next.uri !== inj.uri) curatorRef.current?.pushFront?.(next);
+        next = inj; setUpNext(inj);
+      } else if (refreshNextRef.current) {
+        refreshNextRef.current = false;
+        next = await skippable(nextTrack(), null); setUpNext(next);
+      } else return false;
+      const note = requestNoteRef.current; requestNoteRef.current = null;
+      pending = note && next ? buildSegment(effPrefs(), next, prev, idx, { kind: "full", request: note }) : null; // the DJ takes the request on air
+      return true;
+    };
+    if (pendingSteerRef.current && curatorRef.current?.steer) {
+      const st = pendingSteerRef.current; pendingSteerRef.current = null;
+      const song = await curatorRef.current.steer(st).catch(() => null);
+      if (song) injectRef.current = [song]; else refreshNextRef.current = true;
+      requestNoteRef.current = st.label;
+    }
 
     for (let i = 0; alive(sid); i++) {
       try {
@@ -1123,6 +1258,9 @@ function LiveInner() {
           pending = null;
         }
 
+        await steerNext(i === 0 && !prev ? 0 : i + 1);
+        const gen = steerGenRef.current;
+        if (!alive(sid)) break;
         let over: Segment | null = null;
         if (pending) {
           const seg = await skippable(pending, null);
@@ -1147,6 +1285,10 @@ function LiveInner() {
           continue;
         }
 
+        // A request (or Previous) arrived while the RJ was talking: take it now, with its own short on-air line.
+        if (steerGenRef.current !== gen && await steerNext(i + 1) && pending) { const seg = await skippable(pending, null); pending = null; if (seg && alive(sid)) await speak(seg); }
+        if (!alive(sid)) break;
+        if (!next) continue;
         const current = next;
         const following = nextTrack();
         const plan: Plan = openerDue ? planBreak(0) : planBreak(i + 1);
@@ -1187,66 +1329,104 @@ function LiveInner() {
   const rjName = prefs.rjName || "Your RJ";
   const ytOn = live && outRef.current === "youtube" && (phase === "song" || phase === "waiting" || phase === "rj");
   const ytShow = ytOn && phase !== "rj";
-  const art = (phase === "song" || phase === "waiting") ? now?.image : null;
+  const talking = phase === "rj" || speaking;
+  const showSong = (phase === "song" || phase === "waiting") && !!now;
+  const nowKey = now ? trackKey(now) : "none";
+  const stageKey = phase === "rj" ? "rj" : showSong ? nowKey : phase;
+  const artUrl = showSong ? art?.url ?? null : null;
+  const artRgb = showSong && art?.color ? art.color : "58 102 214";
+  const durS = now?.durationMs ? now.durationMs / 1000 : 0;
+  const fmt = (x: number) => `${Math.floor(x / 60)}:${String(Math.floor(x % 60)).padStart(2, "0")}`;
+  const touchUi = typeof navigator !== "undefined" && /iP(hone|ad|od)|Android/.test(navigator.userAgent);
+  const openPicker = () => { setPickerMode(listenMode); setPickerLangs(prefs.songLangs.join()); setPicker(true); };
+  const mini = <MiniPlayer track={now} art={artUrl} paused={paused} speaking={talking} rjName={rjName} onToggle={() => togglePause()} onNext={next} onExpand={() => { setSheet(null); setDrawer(false); setPicker(false); }} />;
+  const sheetOpen = !!sheet || drawer || picker;
 
   return (
-    <main data-mode={listenMode} className="ambient relative min-h-dvh w-full overflow-x-clip" onClick={() => notice?.startsWith("Tap anywhere") && setNotice(null)}>
+    <main data-mode={listenMode} className="ambient now-playing relative min-h-dvh w-full overflow-x-clip" style={{ ["--art" as string]: `rgb(${artRgb})` }}
+      onClick={() => notice?.startsWith("Tap anywhere") && setNotice(null)}>
       <div aria-hidden className={cx("aurora", live && "is-live", (paused || !live) && "is-paused")}><i /><i /></div>
-      {art && <img src={art} alt="" className="pointer-events-none fixed inset-0 -z-10 h-full w-full scale-150 object-cover opacity-30 blur-[80px] transition-opacity duration-1000" />}
-      <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))] sm:px-6">
+      <div aria-hidden className="art-ambient" />
+      {artUrl && <img key={artUrl} src={artUrl} alt="" aria-hidden className="art-backdrop pointer-events-none fixed inset-0 -z-10 h-full w-full object-cover" />}
+      <div className={cx("player-shell mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-6", sheetOpen && "is-behind")}>
         {/* top bar */}
         <header className="flex h-11 items-center justify-between">
-          <Link href="/settings" onClick={(e) => { if (live) { e.preventDefault(); setDrawer(true); } }} aria-label={live ? "MyRJ, open settings" : "MyRJ settings"} className="flex h-11 items-center gap-2 text-[15px] font-semibold tracking-tight">
+          <Link href="/settings" onClick={(e) => { if (live) { e.preventDefault(); setDrawer(true); } }} aria-label={live ? "MyRJ, open settings" : "MyRJ settings"} className="flex h-11 items-center gap-2 text-[17px] font-semibold tracking-tight">
             <span className={cx("onair-dot h-2 w-2 rounded-full", live && "is-live")} />MyRJ
           </Link>
-          <div className="flex items-center gap-3">
-            {live && <span className="live-badge flex items-center gap-1.5 rounded-full bg-red-500/15 px-2.5 py-1 text-[11px] font-semibold tracking-wider text-red-300"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" />LIVE</span>}
-            <button onClick={() => setDrawer(true)} className="glass flex h-11 w-11 items-center justify-center rounded-full text-zinc-300 hover:text-white" aria-label="Edit RJ">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 6h16M4 12h10M4 18h6" strokeLinecap="round" /></svg>
+          <div className="flex items-center gap-2">
+            {live && <span className="live-badge flex items-center gap-1.5 rounded-full bg-[#ff4d6d]/15 px-2.5 py-1 text-[11px] font-semibold tracking-wider text-[#ff8fa3]"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#ff5c7a]" />LIVE</span>}
+            <button onClick={() => setDrawer(true)} className="glass flex h-11 w-11 items-center justify-center rounded-full text-white/80 hover:text-white" aria-label="Edit RJ">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden><path d="M4 6h16M4 12h10M4 18h6" strokeLinecap="round" /></svg>
             </button>
           </div>
         </header>
 
         {live && (
-          <div className="mt-3 flex items-center justify-center gap-2 text-[12px] text-zinc-500">
-            <span>{modeInfo(listenMode).label}</span><span className="text-zinc-700">·</span>
-            <span className="max-w-[45%] truncate">{isRomantic(listenMode) ? "Hindi only" : langSummary(prefs.songLangs)}</span>{prefs.justMusic && <><span className="text-zinc-700">·</span><span>Just music</span></>}
-            <button onClick={() => { setPickerMode(listenMode); setPickerLangs(prefs.songLangs.join()); setPicker(true); }} className="ml-1 text-[#f3efe8] underline-offset-2 hover:underline">Change</button>
+          <div className="mt-1 flex items-center justify-center gap-2 text-[13px] text-white/55" data-testid="station-line">
+            <span className="text-white/80">{modeInfo(listenMode).label}</span><span className="text-white/25">·</span>
+            <span className="max-w-[40%] truncate">{prefs.station ? (prefs.station === "library" ? "My library" : "Playlist") : isRomantic(listenMode) ? "Hindi only" : (prefs.vibeTags?.length ? prefs.vibeTags.map((x) => VIBE_TAGS.find((y) => y.id === x)?.label).join(", ") : langSummary(prefs.songLangs))}</span>
+            <span className="text-white/25">·</span><span className="truncate">with {rjName}</span>
+            {prefs.justMusic && <><span className="text-white/25">·</span><span>Just music</span></>}
+            <button onClick={openPicker} className="ml-1 font-medium text-[#9fc0ff] underline-offset-2 hover:underline">Change</button>
           </div>
         )}
 
         {/* stage */}
-        <section className="flex min-h-0 flex-1 flex-col items-center justify-center py-2 text-center sm:py-8">
-          <div className="relative">
-            {/* Visible YouTube player (official IFrame API). Always mounted so it keeps playing; shown while a song plays. */}
-            <div className={cx("overflow-hidden rounded-2xl bg-black transition-opacity duration-500", ytShow ? "relative mb-1 h-[200px] w-[min(86vw,356px)] opacity-100 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]" : "pointer-events-none absolute left-0 top-0 h-[200px] w-[356px] opacity-0")} aria-hidden={!ytShow}>
-              <div ref={ytHostRef} className="h-full w-full" />
-              {ytShow && ytStalled && <button data-testid="tap-to-play" onClick={tapToPlay} className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-black/70 text-white"><span className="flex h-16 w-16 items-center justify-center rounded-full bg-[#f3efe8] text-[#141210]"><svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z" /></svg></span><span className="text-sm font-medium">Tap to play</span></button>}
-            </div>
-            <div data-testid="art-toggle" onClick={() => { if (live) togglePause(); }} className={cx("art-wrap aspect-square transition-transform", phase === "song" && !paused && "is-playing", live && "cursor-pointer", ytShow && "hidden", phase === "idle" ? "w-[min(34vw,150px,12svh)] [@media(max-height:700px)]:w-[min(34vw,150px,10svh)]" : "w-[min(64vw,280px,26svh)]", art && "overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]", " duration-700", speaking || phase === "rj" ? "scale-[0.72]" : phase === "song" ? "scale-100" : "scale-[0.94]")}>
-              {art ? <img key={art} src={art} alt="" className="art-img art-swap h-full w-full object-cover" /> : (
-                <div className="relative flex h-full w-full items-center justify-center">
-                  <Mascot state={phase === "rj" || speaking ? "talking" : phase === "tuning" || phase === "recovering" ? "tuning" : live ? "live" : "idle"} className="w-[78%]" getLevel={voiceLevel} />
-                  
+        <section className={cx("flex min-h-0 flex-1 flex-col items-center text-center", live ? "justify-start pt-4 [@media(max-height:700px)]:pt-2" : "justify-center py-2 sm:py-8")}>
+          {live ? (
+            <div data-testid="art-toggle" className={cx("art-wrap relative transition-[width] duration-500",
+              ytShow ? "w-[min(76vw,320px,calc(100svh-600px))] [@media(max-height:760px)]:hidden" : talking && !showSong ? "w-[min(58vw,250px,30svh)]" : "w-[min(84vw,360px,44svh)] [@media(max-height:640px)]:w-[min(56vw,30svh)]")}>
+              <ArtStage id={stageKey} src={artUrl} dir={phase === "rj" ? 0 : dir} playing={showSong && !paused && !ytStalled} dim={paused}
+                label={showSong ? `Cover of ${now?.name}` : `${rjName}`}
+                onSwipe={swipe} onTap={() => { if (live) togglePause(); }}
+                fallback={showSong && now ? <FallbackArt title={now.name} seed={nowKey} /> : (
+                  <div className="dj-card relative flex h-full w-full items-center justify-center">
+                    <Mascot state={talking ? "talking" : phase === "tuning" || phase === "recovering" ? "tuning" : "live"} className="w-[62%]" getLevel={voiceLevel} />
+                  </div>
+                )} />
+              {talking && (
+                <div className="glass onair-pill absolute -bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-end gap-[3px] rounded-full px-3.5 py-2" data-testid="dj-speaking">
+                  {[0, 1, 2, 3, 4].map((b) => <span key={b} className="w-[3px] origin-bottom animate-[eq_0.9s_ease-in-out_infinite] rounded-full bg-[#cfe0ff]" style={{ animationDelay: `${b * 0.12}s`, height: 12 }} />)}
+                  <span className="ml-2 whitespace-nowrap text-[11px] font-medium">{rjName}</span>
                 </div>
               )}
             </div>
-            {(phase === "rj" || speaking) && (
-              <div className="glass onair-pill absolute -bottom-4 left-1/2 flex -translate-x-1/2 items-end gap-[3px] rounded-full px-3.5 py-2" data-testid="dj-speaking">
-                {[0, 1, 2, 3, 4].map((b) => <span key={b} className="w-[3px] origin-bottom animate-[eq_0.9s_ease-in-out_infinite] rounded-full bg-[#f3efe8]" style={{ animationDelay: `${b * 0.12}s`, height: 12 }} />)}
-                <span className="ml-2 whitespace-nowrap text-[11px] font-medium">{rjName}</span>
-              </div>
-            )}
-          </div>
+          ) : (
+            <div className="idle-hero flex aspect-square w-[min(34vw,150px,12svh)] items-center justify-center rounded-[34px] [@media(max-height:700px)]:w-[min(34vw,150px,10svh)]">
+              <Mascot state="idle" className="w-[78%]" getLevel={voiceLevel} />
+            </div>
+          )}
 
-          <div className={cx("min-h-[84px] w-full", live ? "mt-7 sm:mt-10" : "mt-4 sm:mt-6")}>
-            {(phase === "rj" || speaking) && script ? (
+          <div className={cx("flex w-full items-start gap-3.5", live ? (ytShow ? "mt-5" : "mt-7 [@media(max-height:700px)]:mt-5") : "mt-4 min-h-[84px] sm:mt-6")}>
+            {/* Visible YouTube player (official IFrame API). YouTube requires it on screen at 200×200 or more while it plays, so it sits
+                beside the title as a "video window" and the cover stays the centrepiece. Always mounted (moving an iframe reloads it). */}
+            <div className={cx("video-tile shrink-0 overflow-hidden rounded-[22px] bg-black transition-opacity duration-500", ytShow ? "relative h-[200px] w-[200px] opacity-100" : "pointer-events-none fixed left-0 top-0 h-[200px] w-[200px] opacity-0")} aria-hidden={!ytShow} data-testid="video-tile">
+              <div ref={ytHostRef} className="h-full w-full" />
+              {ytShow && ytStalled && <button data-testid="tap-to-play" onClick={tapToPlay} className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-black/70 text-white"><span className="flex h-14 w-14 items-center justify-center rounded-full bg-[#e8efff] text-[#06102a]"><svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z" /></svg></span><span className="text-sm font-medium">Tap to play</span></button>}
+            </div>
+            <div className="min-w-0 flex-1">
+            {talking && script && !ytShow ? (
               <Lyrics key={script} text={script} clock={clock} />
-            ) : phase === "song" || (phase === "waiting" && now) ? (
-              <div key={now?.uri ?? now?.ytId ?? now?.name} className="track-in">
-                <h1 className="truncate text-[22px] font-semibold tracking-tight sm:text-[26px]">{now?.name}</h1>
-                <p className="mt-1 truncate text-[15px] text-zinc-400">{now?.artists}</p>
+            ) : showSong && now ? (
+              ytShow ? (
+                <div className="flex h-[200px] flex-col text-left">
+                  <p className="line-clamp-3 text-[19px] font-semibold leading-tight tracking-tight text-white" data-testid="now-title">{now.name}</p>
+                  <p className="mt-1 line-clamp-2 text-[14px] text-white/60">{now.artists}</p>
+                  <button onClick={() => setLyricsOpen(true)} className="glass mt-auto flex h-11 w-11 items-center justify-center rounded-full text-white/85" aria-label="Lyrics" data-testid="open-lyrics">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M4 5h16v11H8l-4 4V5Z" /><path d="M8 9h8M8 12.5h5" /></svg>
+                  </button>
+                </div>
+              ) : (
+              <div className="flex items-center gap-3">
+                <div className="min-w-0 flex-1"><TrackTitle id={nowKey} title={now.name} artist={now.artists} dir={dir} /></div>
+                <button onClick={() => setLyricsOpen(true)} className="glass flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-white/85" aria-label="Lyrics" data-testid="open-lyrics">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M4 5h16v11H8l-4 4V5Z" /><path d="M8 9h8M8 12.5h5" /></svg>
+                </button>
               </div>
+              )
+            ) : talking && script ? (
+              <Lyrics key={script} text={script} clock={clock} />
             ) : phase === "tuning" ? (
               <BootStatus boot={boot} onRetry={() => { stop(); setTimeout(goLive, 50); }} />
             ) : !live ? (
@@ -1254,19 +1434,27 @@ function LiveInner() {
             ) : (
               <div className="fade-up"><h1 className="text-[22px] font-semibold tracking-tight sm:text-[26px]">{rjName}</h1></div>
             )}
+            </div>
           </div>
 
-          {live && <><Visualizer active={phase === "song" || phase === "rj" || speaking} paused={paused || ytStalled} getLevel={voiceLevel} className="mt-3 w-full [@media(max-height:700px)]:hidden" />
-          <div className={cx("mt-3 h-1 w-full overflow-hidden rounded-full bg-white/10 transition-opacity", phase !== "song" && "opacity-0")}>
-            <div className={cx("progress-fill h-full rounded-full transition-[width] duration-700 ease-linear", phase !== "song" && "opacity-0")} style={{ width: `${progress * 100}%` }} />
-          </div>
-          <p className="mt-3 h-4 text-xs text-zinc-500" aria-live="polite">{paused && live ? "Paused" : status}</p></>}
+          {live && <>
+            <div className="mt-3 w-full">
+              <div className={cx("progress-track h-[5px] w-full overflow-hidden rounded-full transition-opacity", phase !== "song" && "opacity-0")}>
+                <div className="progress-fill h-full rounded-full transition-[width] duration-700 ease-linear" style={{ width: `${progress * 100}%` }} />
+              </div>
+              <div className={cx("mt-1.5 flex justify-between text-[11px] tabular-nums text-white/45", (phase !== "song" || !durS) && "invisible")}>
+                <span>{fmt(progress * durS)}</span><span>-{fmt(Math.max(0, durS - progress * durS))}</span>
+              </div>
+            </div>
+            {!ytShow && !(talking && !showSong) && <div className="mt-1 w-full [@media(max-height:760px)]:hidden"><Visualizer active={phase === "song" || talking} paused={paused || ytStalled} getLevel={voiceLevel} className="w-full" /></div>}
+            <p className="mt-1 h-4 text-xs text-white/50" aria-live="polite">{paused && live ? "Paused" : status}</p>
+          </>}
           {now && (outRef.current === "preview" || phase === "waiting") && now.spotifyUrl && <a href={now.spotifyUrl} target="_blank" rel="noreferrer" className="mt-2 text-xs text-[#1DB954]">Open in Spotify ↗</a>}
         </section>
 
-        {notice && <div className="fade-up glass mb-3 rounded-2xl px-4 py-3 text-center text-sm text-zinc-200">{notice}
-          {notice.startsWith("Open the Spotify app") && <button onClick={() => { setNotice(null); stop(); setTimeout(goLive, 80); }} className="ml-2 font-medium text-[#f3efe8] underline underline-offset-2">Retry</button>}
-          {notice.startsWith("Spotify needs a breather") && <button onClick={() => { clearSpotifyBackoff(); setNotice(null); }} className="ml-2 font-medium text-[#f3efe8] underline underline-offset-2">Try now</button>}</div>}
+        {notice && <div className="fade-up glass mb-3 rounded-2xl px-4 py-3 text-center text-sm text-zinc-100">{notice}
+          {notice.startsWith("Open the Spotify app") && <button onClick={() => { setNotice(null); stop(); setTimeout(goLive, 80); }} className="ml-2 font-medium text-[#9fc0ff] underline underline-offset-2">Retry</button>}
+          {notice.startsWith("Spotify needs a breather") && <button onClick={() => { clearSpotifyBackoff(); setNotice(null); }} className="ml-2 font-medium text-[#9fc0ff] underline underline-offset-2">Try now</button>}</div>}
         {needReconnect && <a href="/api/auth/spotify/login?return=/live" className="mb-3 rounded-2xl bg-[#1DB954] px-4 py-3 text-center text-sm font-medium text-black">Reconnect Spotify to keep playing</a>}
 
         {phase === "tuning" && !upNext && (
@@ -1275,50 +1463,62 @@ function LiveInner() {
             <div className="flex-1 space-y-1.5"><div className="skeleton h-2 w-14 rounded" /><div className="skeleton h-3 w-40 rounded" /></div>
           </div>
         )}
-        {upNext && live && (
-          <div className="glass mb-4 flex items-center gap-3 rounded-2xl p-2.5">
-            {upNext.image ? <img src={upNext.image} alt="" className="h-10 w-10 rounded-lg" /> : <div className="h-10 w-10 rounded-lg bg-white/10" />}
-            <div className="min-w-0 flex-1 text-left">
-              <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-zinc-500">Up next</p>
-              <p className="truncate text-sm">{upNext.name} <span className="text-zinc-500">· {upNext.artists}</span></p>
+
+        {upNext && live && !ytShow && !talking && (
+          <button onClick={() => setSheet("library")} className="glass mb-4 flex items-center gap-3 rounded-2xl p-2.5 text-left [@media(max-height:760px)]:hidden" aria-label={`Coming up: ${upNext.name}`}>
+            {upNext.image ? <img src={upNext.image} alt="" className="h-10 w-10 rounded-lg object-cover" /> : <div className="h-10 w-10 rounded-lg bg-white/10" />}
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-white/45">Up next</p>
+              <p className="truncate text-sm">{upNext.name} <span className="text-white/45">· {upNext.artists}</span></p>
             </div>
-          </div>
+          </button>
         )}
 
-        <div className="sticky bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-20 flex items-center gap-3">
+        <div className="sticky bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-20 space-y-3">
           {!live ? (
-            <button aria-label="Go Live" onClick={goLive} className="h-14 w-full rounded-full bg-[#f3efe8] text-[17px] sm:h-16 font-semibold text-black shadow-[0_12px_44px_-14px_rgba(243,239,232,0.18)] transition active:scale-[0.97]">Go Live</button>
+            <button aria-label="Go Live" onClick={goLive} className="go-live h-14 w-full rounded-full text-[17px] font-semibold sm:h-16 transition active:scale-[0.97]">Go Live</button>
           ) : (
-            /* Player dock: everything a thumb needs, on frosted glass, pinned above the home indicator. */
-            <div className="liquid-glass dock flex w-full items-center justify-between" data-testid="dock">
-              <button onClick={() => { setPickerMode(listenMode); setPickerLangs(prefs.songLangs.join()); setPicker(true); }} className="dock-btn" aria-label="Station and songs">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{DOCK_ICONS[listenMode]}</svg>
-                <span aria-hidden>Station</span>
-              </button>
-              <button onClick={() => stop("Off air. Tap Go Live to tune back in.")} className="flex h-[52px] w-[52px] items-center justify-center rounded-full text-zinc-300 transition hover:text-white active:scale-90" aria-label="Stop, go off air">
-                <span className="h-3.5 w-3.5 rounded-[3px] bg-current" />
-              </button>
-              <button onClick={() => { if (ytStalled) tapToPlay(); else togglePause(); }} disabled={phase === "tuning"} aria-label={paused || ytStalled ? "Play" : "Pause"} aria-pressed={paused || ytStalled} data-testid="playpause"
-                className={cx("play-btn flex h-[72px] w-[72px] select-none items-center justify-center rounded-full bg-[#f3efe8] text-[#141210] shadow-[0_12px_44px_-14px_rgba(243,239,232,0.3)] transition active:scale-[0.93] disabled:opacity-40", !(paused || ytStalled) && phase !== "tuning" && "is-playing")}>
-                <svg className="ico" data-on={paused || ytStalled} width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z" /></svg>
-                <svg className="ico" data-on={!(paused || ytStalled)} width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden><rect x="6" y="5" width="4" height="14" rx="1.3" /><rect x="14" y="5" width="4" height="14" rx="1.3" /></svg>
-              </button>
-              <button onClick={next} disabled={phase === "tuning" || phase === "recovering"} className="flex h-[52px] w-[52px] items-center justify-center rounded-full text-zinc-300 transition hover:text-white active:scale-90 disabled:opacity-40" aria-label="Next">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M5 6.2v11.6a1 1 0 0 0 1.55.83L15 13v4.5a1 1 0 0 0 2 0v-11a1 1 0 0 0-2 0V11L6.55 5.37A1 1 0 0 0 5 6.2Z" /></svg>
-              </button>
-              <button onClick={() => setDrawer(true)} className="dock-btn" aria-label="Host and voice settings">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7" /></svg>
-                <span aria-hidden>Host</span>
-              </button>
-            </div>
+            <>
+              {/* transport */}
+              <div className="flex items-center justify-center gap-7">
+                <button onClick={previous} disabled={phase === "tuning" || phase === "recovering"} className="transport-btn flex h-14 w-14 items-center justify-center rounded-full disabled:opacity-35" aria-label="Previous">
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M19 6.2v11.6a1 1 0 0 1-1.55.83L9 13v4.5a1 1 0 0 1-2 0v-11a1 1 0 0 1 2 0V11l8.45-5.63A1 1 0 0 1 19 6.2Z" /></svg>
+                </button>
+                <button onClick={() => { if (ytStalled) tapToPlay(); else togglePause(); }} disabled={phase === "tuning"} aria-label={paused || ytStalled ? "Play" : "Pause"} aria-pressed={paused || ytStalled} data-testid="playpause"
+                  className={cx("play-btn flex h-[76px] w-[76px] select-none items-center justify-center rounded-full transition active:scale-[0.93] disabled:opacity-40", !(paused || ytStalled) && phase !== "tuning" && "is-playing")}>
+                  <svg className="ico" data-on={paused || ytStalled} width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z" /></svg>
+                  <svg className="ico" data-on={!(paused || ytStalled)} width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden><rect x="6" y="5" width="4" height="14" rx="1.3" /><rect x="14" y="5" width="4" height="14" rx="1.3" /></svg>
+                </button>
+                <button onClick={next} disabled={phase === "tuning" || phase === "recovering"} className="transport-btn flex h-14 w-14 items-center justify-center rounded-full disabled:opacity-35" aria-label="Next">
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M5 6.2v11.6a1 1 0 0 0 1.55.83L15 13v4.5a1 1 0 0 0 2 0v-11a1 1 0 0 0-2 0V11L6.55 5.37A1 1 0 0 0 5 6.2Z" /></svg>
+                </button>
+              </div>
+              {!touchUi && canDuck() && (
+                <label className="flex items-center gap-3 px-2 text-white/50" aria-label="Volume">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M4 9h4l5-4v14l-5-4H4V9Z" /></svg>
+                  <input type="range" min={0} max={1} step={0.01} value={vol} onChange={(e) => { const v = Number(e.target.value); setVol(v); volRef.current = v; setSongVol(songVolRef.current); }} className="vol-slider h-1 flex-1" />
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden><path d="M4 9h4l5-4v14l-5-4H4V9Z" fill="currentColor" /><path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" strokeLinecap="round" /></svg>
+                </label>
+              )}
+              {/* dock: everything else, thumb-reachable */}
+              <div className="liquid-glass dock flex w-full items-center justify-between" data-testid="dock">
+                <DockBtn label="Request a song or mood" text="Request" onClick={() => setSheet("discover")} icon={<path d="M12 3.5 13.9 8l4.6.4-3.5 3 1.1 4.5L12 13.5 7.9 15.9 9 11.4l-3.5-3L10.1 8 12 3.5ZM5 19.5h14" />} />
+                <DockBtn label="Library and playlists" text="Library" onClick={() => setSheet("library")} icon={<path d="M5 4.5v15M9.5 4.5v15M14 5l4.5 14" />} />
+                <DockBtn label="Station and songs" text="Station" onClick={openPicker} icon={DOCK_ICONS[listenMode]} />
+                <DockBtn label="Host and voice settings" text="Host" onClick={() => setDrawer(true)} icon={<><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7" /></>} />
+                <button onClick={() => stop("Off air. Tap Go Live to tune back in.")} className="dock-btn" aria-label="Stop, go off air">
+                  <span className="mt-[3px] h-[14px] w-[14px] rounded-[3px] bg-current" /><span aria-hidden className="mt-[3px]">Stop</span>
+                </button>
+              </div>
+            </>
           )}
         </div>
 
-        <button aria-expanded={showDiag} onClick={() => setShowDiag((v) => !v)} className="mt-4 text-[10px] uppercase tracking-[0.14em] text-zinc-500 hover:text-zinc-300">
+        <button aria-expanded={showDiag} onClick={() => setShowDiag((v) => !v)} className="mt-3 text-[10px] uppercase tracking-[0.14em] text-white/40 hover:text-white/70">
           {diag.error && live ? "● " : ""}Playback details
         </button>
         {showDiag && (
-          <div className="glass fade-up mt-2 rounded-2xl p-3 text-left font-mono text-[11px] text-zinc-400">
+          <div className="glass fade-up mt-2 rounded-2xl p-3 text-left font-mono text-[11px] text-zinc-300">
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
               <dt>output</dt><dd>{diag.output ?? "-"}</dd>
               <dt>account</dt><dd className="truncate">{diag.account ?? "-"} {diag.product && `(${diag.product})`}</dd>
@@ -1329,39 +1529,47 @@ function LiveInner() {
               <dt>rj script</dt><dd className={cx("break-words", diag.script?.startsWith("failed") && "text-red-300")}>{diag.script ?? "-"}</dd>
               <dt>rj voice</dt><dd className={cx("break-words", diag.voice?.startsWith("failed") && "text-red-300")}>{diag.voice ?? "-"}</dd>
               <dt>audio</dt><dd className={cx("break-words", diag.audio && diag.audio !== "ok" && "text-red-300")}>{diag.audio ?? "-"}</dd>
+              <dt>cover art</dt><dd>{showSong ? (art?.kind === "album" ? "album cover" : art?.kind === "thumb" ? "video thumbnail" : art ? "generated" : "loading") : "-"}</dd>
               {diag.error && <><dt className="text-red-400">error</dt><dd className="break-words text-red-300">{diag.error}</dd></>}
             </dl>
-            {!!diag.log?.length && <pre className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap text-zinc-500">{diag.log.slice(-10).join("\n")}</pre>}
+            {!!diag.log?.length && <pre className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap text-zinc-400">{diag.log.slice(-10).join("\n")}</pre>}
             <a href="/api/auth/spotify/login?return=/live" className="mt-2 inline-block text-[#1DB954]">Reconnect Spotify</a>
           </div>
         )}
       </div>
 
-      {picker && (
-        <div className="fixed inset-0 z-50">
-          <div className="fade-up absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={closePicker} />
-          <div role="dialog" aria-modal="true" aria-label="Station and songs" className="sheet-up glass-sheet absolute inset-x-0 bottom-0 mx-auto max-h-[92dvh] max-w-md overflow-y-auto overscroll-contain rounded-t-[28px] px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3">
-            <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-white/15" />
-            <SessionPicker mode={pickerMode} onMode={setPickerMode} p={prefs} up={up} />
-            <button onClick={closePicker} className="mt-5 h-12 w-full rounded-full bg-[#f3efe8] text-[15px] font-semibold text-[#141210] active:scale-[0.98]">Done</button>
-          </div>
-        </div>
-      )}
+      <Sheet open={picker} onClose={closePicker} label="Station and songs" footer={live ? mini : undefined}>
+        <SessionPicker mode={pickerMode} onMode={setPickerMode} p={prefs} up={up} />
+        <button onClick={closePicker} className="go-live mt-5 h-12 w-full rounded-full text-[15px] font-semibold active:scale-[0.98]">Done</button>
+      </Sheet>
 
-      {/* edit drawer */}
-      {drawer && (
-        <div className="fixed inset-0 z-50">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm fade-up" onClick={() => setDrawer(false)} />
-          <div role="dialog" aria-modal="true" aria-label="Your RJ" className="sheet-up glass-sheet absolute inset-x-0 bottom-0 mx-auto flex max-h-[88dvh] max-w-xl flex-col pb-[env(safe-area-inset-bottom)] rounded-t-[28px]">
-            <div className="flex items-center justify-between px-6 pb-2 pt-4">
-              <div><div className="mx-auto mb-3 h-1 w-10 rounded-full bg-white/15" /><h2 className="text-lg font-semibold">Your RJ</h2><p className="text-xs text-zinc-500">Changes apply from the next break.</p></div>
-              <button onClick={() => setDrawer(false)} className="glass h-9 rounded-full px-4 text-sm">Done</button>
-            </div>
-            <div className="overflow-y-auto overscroll-contain px-6 pb-10 pt-4"><AllPrefs p={prefs} up={up} compact returnTo="/live" /></div>
-          </div>
+      <Sheet open={sheet === "discover"} onClose={() => setSheet(null)} label="Request" footer={live ? mini : undefined}>
+        <DiscoverPanel p={prefs} up={up} busy={reqBusy} last={reqMsg} live={live} onRequest={requestSteer} />
+      </Sheet>
+      <Sheet open={sheet === "library"} onClose={() => setSheet(null)} label="Library" footer={live ? mini : undefined}>
+        <LibraryPanel p={prefs} up={up} upcoming={upcoming} source={prefs.music} onStation={changeStation} />
+      </Sheet>
+
+      <Sheet open={drawer} onClose={() => setDrawer(false)} label="Your RJ" footer={live ? mini : undefined}>
+        <div className="flex items-center justify-between pb-2">
+          <div><h2 className="text-[28px] font-bold tracking-tight">Your RJ</h2><p className="text-[13px] text-white/50">Changes apply from the next break.</p></div>
+          <button onClick={() => setDrawer(false)} className="glass h-10 rounded-full px-4 text-sm">Done</button>
         </div>
-      )}
+        <div className="pt-4"><AllPrefs p={prefs} up={up} compact returnTo="/live" /></div>
+      </Sheet>
+
+      <LyricsView open={lyricsOpen} onClose={() => setLyricsOpen(false)} trackId={showSong ? nowKey : null} title={now?.name ?? ""} artist={now?.artists ?? ""}
+        durationS={durS || undefined} clock={songClock} art={artUrl} color={showSong ? art?.color : null} />
     </main>
+  );
+}
+
+function DockBtn({ label, text, onClick, icon }: { label: string; text: string; onClick: () => void; icon: React.ReactNode }) {
+  return (
+    <button onClick={onClick} className="dock-btn" aria-label={label}>
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{icon}</svg>
+      <span aria-hidden>{text}</span>
+    </button>
   );
 }
 

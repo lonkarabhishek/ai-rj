@@ -8,10 +8,10 @@ test("live screen: frosted dock with every control in thumb reach, visualizer ru
   await page.goto("/live"); await goLive(page, w);
   const dock = page.getByTestId("dock");
   await expect(dock).toBeVisible({ timeout: 20000 });
-  for (const name of ["Station and songs", "Stop, go off air", "Next", "Host and voice settings"]) await expect(dock.getByRole("button", { name, exact: true })).toBeVisible();
+  for (const name of ["Request a song or mood", "Library and playlists", "Station and songs", "Host and voice settings", "Stop, go off air"]) await expect(dock.getByRole("button", { name, exact: true })).toBeVisible();
   // touch targets: at least 44x44 CSS px, all inside the viewport, dock clear of the bottom edge
   const vp = page.viewportSize()!;
-  for (const b of await dock.getByRole("button").all()) {
+  for (const b of [...await dock.getByRole("button").all(), page.getByRole("button", { name: "Previous" }), page.getByRole("button", { name: "Next", exact: true }), page.getByTestId("playpause")]) {
     const r = (await b.boundingBox())!;
     expect(Math.min(r.width, r.height), "touch target").toBeGreaterThanOrEqual(44);
     expect(r.x).toBeGreaterThanOrEqual(0); expect(r.x + r.width).toBeLessThanOrEqual(vp.width); expect(r.y + r.height).toBeLessThanOrEqual(vp.height);

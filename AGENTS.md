@@ -120,13 +120,16 @@ src/lib/
   llm.ts                 small LLM jobs (labels, import): Gemini first, Claude if set
   guard.ts               same-origin check, in-memory rate limit, bounded JSON, private-host check
   browserVoice.ts        device voice: async voice list, scoring per language, watchdog
+  artwork.ts, songmeta.ts cover art lookup (/api/art, iTunes) + ambient colour; YouTube title/artist cleanup
+  lrc.ts                 LRC parser (line + enhanced word timestamps)
   tts.ts                 Gemini / self-hosted / Azure / ElevenLabs synthesis, voice ids, defaultAzureVoice()
   spotifyClient.ts       browser-side Spotify: token refresh, Curator, 429 backoff
   spotify.ts             server-side Spotify token helpers
   ytClient.ts            YouTube curator (YtCurator), language rules, NOT_A_SONG filter, YtPlayer (IFrame API)
   ytmusic.ts             server-side YouTube Data API: pool, search, video details filters
   youtube.ts, linkimport.ts, news.ts, tokens.ts, supabase/*
-src/components/          ui.tsx, prefs.tsx, Lyrics.tsx, Mascot.tsx, account.tsx
+src/components/          ui.tsx, prefs.tsx, Lyrics.tsx (DJ captions), Mascot.tsx, account.tsx,
+                         ArtStage.tsx (cover + swipe transitions), LyricsView.tsx (song lyrics), Sheets.tsx (Request, Library, mini player)
 supabase/migrations/     SQL for accounts
 tests/e2e/               Playwright specs + fakes (fake.ts, fakeYt.ts)
 ```
@@ -135,6 +138,8 @@ Key behaviours to know before editing:
 
 - **Romantic Hindi presets:** `ListenMode` also has `romantic_m`, `romantic_f` and `romantic_s` (Sensual: Masculine's Dhruv voice, a teasing RJ that is suggestive but never explicit, and only songs Haiku tags `sensual` (`/api/songmood`, `isSensual()`, `SENSUAL_QUERIES`); search results are tagged too; a 30-60s sensual story (`sensual_story` segment, suggestive, never explicit) every 2-3 songs, told in the gap between songs, never over one) (`ROMANTIC_MODES` in `src/lib/prefs.ts`: label, voice id, fallback voice). They are not in `MODES`; the picker shows them in their own row. For that session only they force Hindi songs (`effectiveSongLangs()`), Hindi RJ, soft energy and their own voice (`effPrefs()` in `live/page.tsx`, and `/api/tts` enforces it server-side via `romanticVoice()`). Songs: `ROMANTIC_QUERIES` / `NOT_ROMANTIC_RE` in both `Curator` and `YtCurator`. Script rules: `MODE_RULES` in `script.ts`; `/api/segment` forces Hindi and no jokes/news. SSML prosody and style (only if the voice's StyleList has it) are in `buildSsml()`. Tests: `tests/e2e/romantic.spec.ts`, `tests/e2e/sensual.spec.ts`. Verify new voice ids against the live Azure list; never invent keys.
 - **Playback state machine:** `src/app/live/page.tsx` (`phase`: idle, tuning, song, rj, waiting, recovering). Play/pause goes through one path. Don't add parallel timers.
+- **Steering (requests, Previous, stations, tags):** never start playback directly. Put tracks in `injectRef` or set `refreshNextRef`, bump `steerGenRef`, then `skipRef.current()` if the change should be immediate; the loop's `steerNext()` applies it once at the next junction and replaces the prefetched DJ break.
+- **YouTube player tile:** must stay visible at ≥200×200 while playing and must never be re-parented (moving an iframe reloads it).
 - **RJ script generation:** `llmScript()` in `src/lib/script.ts`, called by `/api/segment`. All text shown or spoken must pass `stripTags()`. Full breaks run a show segment (`SegmentType`: story, trivia_q/trivia_a, hot_take, callback, dedication, vibe) chosen by `nextSegment()` in `live/page.tsx` and checked by `segmentFor()`; a trivia question's answer comes back on a hidden `ANSWER:` line (`splitAnswer()`), is held client-side and revealed at the next break. Breaks get the session's played songs (`history`).
 - **Transitions:** where we control song volume (desktop Spotify SDK, YouTube off iOS) the RJ talks over the outro and the next intro (`outroLeadMs()`), fades go through `fadeSdk()` (newest fade wins; never set volume directly) and `volumeGuard()` restores a song left ducked. Phone Spotify (Connect) and iOS YouTube can't duck: tight cuts, the next song is queued on the device (`startOn(..., after)`) and adopted if Spotify moved on by itself while the page was frozen.
 - **TTS:** `/api/tts` tries the chosen voice's provider, then the rest in order (Gemini, own server, Azure, ElevenLabs); on a 502 the client speaks with the device voice (`src/lib/browserVoice.ts`) and rests the neural voice for a while after `quota_exceeded`. Voice id `auto` = server decides, `browser` = always the device voice.

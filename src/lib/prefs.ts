@@ -21,6 +21,8 @@ export interface Prefs {
   talk: { news: boolean; jokes: boolean; facts: boolean };
   music: "spotify" | "youtube"; // playback source
   justMusic: boolean; // RJ keeps to minimal intros (silent in Focus)
+  vibeTags?: string[]; // mood/genre tags steering discovery (ids from VIBE_TAGS)
+  station?: string | null; // null = mix; "library" = my likes + playlists; or one imported playlist URL
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -41,6 +43,35 @@ export const DEFAULT_PREFS: Prefs = {
   justMusic: false,
   music: "spotify",
 };
+/** Mood and genre tags. Tapping one steers what the radio finds next (YouTube or Spotify search terms). */
+export const VIBE_TAGS: { id: string; label: string; kind: "mood" | "genre"; q: string[] }[] = [
+  { id: "chill", label: "Chill", kind: "mood", q: ["chill songs", "relaxing chill vibes songs"] },
+  { id: "happy", label: "Happy", kind: "mood", q: ["feel good happy songs", "upbeat happy hits"] },
+  { id: "sad", label: "Sad", kind: "mood", q: ["sad songs", "emotional heartbreak songs"] },
+  { id: "love", label: "Love", kind: "mood", q: ["romantic love songs", "love ballads"] },
+  { id: "party", label: "Party", kind: "mood", q: ["party hits", "dance party songs"] },
+  { id: "workout", label: "Workout", kind: "mood", q: ["workout motivation songs", "gym hype songs"] },
+  { id: "focus", label: "Focus", kind: "mood", q: ["focus instrumental music", "lofi study beats"] },
+  { id: "worship", label: "Worship", kind: "genre", q: ["worship songs", "gospel praise songs", "alabanzas cristianas"] },
+  { id: "reggae", label: "Reggae", kind: "genre", q: ["reggae hits", "roots reggae songs"] },
+  { id: "dancehall", label: "Dancehall", kind: "genre", q: ["dancehall hits", "new dancehall songs"] },
+  { id: "soca", label: "Soca", kind: "genre", q: ["soca hits", "soca road march songs"] },
+  { id: "punta", label: "Punta", kind: "genre", q: ["punta rock belize", "punta garifuna music"] },
+  { id: "latin", label: "Latin", kind: "genre", q: ["latin pop hits", "musica latina exitos"] },
+  { id: "reggaeton", label: "Reggaeton", kind: "genre", q: ["reggaeton hits", "reggaeton nuevo"] },
+  { id: "bachata", label: "Bachata", kind: "genre", q: ["bachata hits", "bachata romantica"] },
+  { id: "regional", label: "Regional", kind: "genre", q: ["regional mexicano exitos", "corridos tumbados"] },
+  { id: "rnb", label: "R&B", kind: "genre", q: ["r&b hits", "rnb slow jams"] },
+  { id: "hiphop", label: "Hip-hop", kind: "genre", q: ["hip hop hits", "rap hits"] },
+  { id: "pop", label: "Pop", kind: "genre", q: ["pop hits", "top pop songs"] },
+  { id: "country", label: "Country", kind: "genre", q: ["country hits", "country love songs"] },
+  { id: "throwbacks", label: "Throwbacks", kind: "mood", q: ["90s 2000s throwback hits", "old school classics"] },
+];
+export const vibeQueries = (ids: string[] = []) => ids.flatMap((id) => VIBE_TAGS.find((t) => t.id === id)?.q ?? []);
+
+/** A steer for the curator: search terms that define the vibe, and an optional song to play right away. */
+export interface Steer { label: string; queries: string[]; song?: { title: string; artist: string } | null; kind: "song" | "mood" | "artist" | "search" }
+
 export type SongLang = "any" | "hindi" | "english" | "spanish" | "punjabi" | "marathi" | "tamil" | "telugu";
 export const SONG_LANGS: { id: SongLang; label: string }[] = [
   { id: "any", label: "Any" }, { id: "hindi", label: "Hindi" }, { id: "english", label: "English" }, { id: "spanish", label: "Spanish" }, { id: "punjabi", label: "Punjabi" },

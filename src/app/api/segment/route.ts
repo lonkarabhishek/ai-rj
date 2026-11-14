@@ -40,6 +40,7 @@ function parse(b: Record<string, unknown>): Omit<SegmentInput, "headlines"> {
     history: (Array.isArray(b.history) ? b.history : []).map(track).filter((t): t is TrackInfo => !!t).slice(-12).map((t) => ({ name: t.name, artists: t.artists })),
     trivia: trivia && str(trivia.q, 300) && str(trivia.a, 150) ? { q: str(trivia.q, 300), a: str(trivia.a, 150) } : null,
     minutes: b.minutes === undefined ? undefined : int(b.minutes, 0, 24 * 60, 0),
+    request: str(b.request, 120).trim() || undefined,
   };
 }
 

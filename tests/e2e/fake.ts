@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 
 export const MP3 = fs.readFileSync(path.join(__dirname, "tone.mp3"));
+export const COVER = fs.readFileSync(path.join(__dirname, "../../public/icons/icon-192.png"));
 export const IPHONE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const jitter = (a: number, b: number) => a + Math.random() * (b - a);
@@ -21,7 +22,7 @@ export interface Faults {
   noDevices?: boolean;
   mood500?: boolean;           // /api/songmood fails (classification down)
 }
-export interface Opts { mobile: boolean; prefs?: Record<string, unknown> | null; faults?: Faults; songMs?: number; segmentMs?: number; ttsMs?: number; trivia?: boolean } // trivia: the first full break after the opener asks a question
+export interface Opts { noArt?: boolean; artFail?: boolean; mobile: boolean; prefs?: Record<string, unknown> | null; faults?: Faults; songMs?: number; segmentMs?: number; ttsMs?: number; trivia?: boolean } // trivia: the first full break after the opener asks a question
 
 export const BASE_PREFS = { onboarded: true, rjName: "Riya", listenerName: "Abhishek", voiceId: "en-IN-NeerjaNeural", newsTopics: ["AI"] };
 
@@ -36,6 +37,7 @@ export class World {
   tts: string[] = [];
   searches: string[] = [];
   moodCalls: string[][] = [];
+  artCalls: string[] = [];
   spotifyCalls: string[] = [];
   consoleErrors: string[] = [];
   player = { uri: "", startedAt: 0, pausedAt: 0, isPlaying: false, device: "", queue: [] as string[] };
@@ -207,6 +209,22 @@ export async function setup(ctx: BrowserContext, page: Page, o: Opts) {
     const labels: Record<string, any> = {};
     for (const it of b.items) { const t = w.tracks.get(it.id); if (t) labels[it.id] = { lang: t.lang, romantic: !/party|dance|remix/i.test(t.name), sensual: !!t.sensual }; }
     r.fulfill({ json: { labels } });
+  });
+  // Cover art and lyrics (the real routes call iTunes and LRCLIB). Covers are served from a fake host with CORS, like Apple's CDN.
+  w.artCalls = [];
+  await page.route("**/api/art?**", async (r) => {
+    const u = new URL(r.request().url()); const t = u.searchParams.get("title") ?? ""; w.artCalls.push(t);
+    await sleep(jitter(40, 120));
+    if (/noart/i.test(t) || o.noArt) return r.fulfill({ json: { art: null } });
+    r.fulfill({ json: { art: `https://covers.test/${encodeURIComponent(t)}.png`, title: t } });
+  });
+  await page.route("https://covers.test/**", (r) => (o.artFail ? r.fulfill({ status: 404, body: "" }) : r.fulfill({ status: 200, contentType: "image/png", headers: { "access-control-allow-origin": "*" }, body: COVER })));
+  await page.route("**/api/lyrics?**", async (r) => {
+    const t = new URL(r.request().url()).searchParams.get("title") ?? "";
+    await sleep(jitter(40, 120));
+    if (/nolyrics/i.test(t)) return r.fulfill({ json: { synced: null, plain: null } });
+    const lines = [...Array(40)].map((_, i) => `[${String(Math.floor(i * 2 / 60)).padStart(2, "0")}:${String((i * 2) % 60).padStart(2, "0")}.00]Line ${i} of ${t}`).join("\n");
+    r.fulfill({ json: { synced: lines, plain: null, source: "LRCLIB" } });
   });
   await page.route("**/api/news**", async (r) => { await sleep(jitter(300, 700)); r.fulfill({ json: { headlines: [{ title: "Models get faster again, says a new benchmark today", source: "Wire" }] } }); });
   (w as any).tokenForced = () => tokenForced;

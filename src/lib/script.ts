@@ -21,6 +21,7 @@ export interface SegmentInput {
   history?: { name: string; artists: string }[]; // songs played this session, oldest first
   trivia?: { q: string; a: string } | null; // a trivia question asked earlier: reveal the answer in this break
   minutes?: number; // how long this session has been on air
+  request?: string; // what the listener just asked for ("Bendiciones · Jhexx", "Chill"): the DJ acknowledges it once
 }
 
 /** Recurring show bits for full breaks. "vibe" is the plain break. */
@@ -39,7 +40,10 @@ const SEGMENT_RULES: Record<SegmentType, string> = {
 
 let RECENT: string[] = [];
 const pick = (a: string[]) => {
-  const fresh = a.filter((x) => !RECENT.some((r) => r.includes(x.slice(0, 25))));
+  // Compare the longest literal piece of the template ("You know the drill, " in "You know the drill, {me}"),
+  // since RECENT holds rendered text where placeholders are already filled in.
+  const key = (x: string) => x.split(/\{\w+\}/).map((p) => p.trim()).sort((p, q) => q.length - p.length)[0].slice(0, 25);
+  const fresh = a.filter((x) => { const k = key(x); return k.length < 4 || !RECENT.some((r) => r.includes(k)); });
   const pool = fresh.length ? fresh : a;
   return pool[Math.floor(Math.random() * pool.length)];
 };
@@ -167,9 +171,13 @@ const MODE_LINES: Record<"gym" | "drive" | "focus", Record<K, string[]>> = {
   },
 };
 
+const REQ_ACK: Record<K, string> = { en: "You asked, I'm playing it: {r}.", es: "Lo pediste y aquí está: {r}.", hl: "Aapne maanga, toh suniye: {r}.", hi: "आपकी फ़रमाइश पर: {r}।", mr: "तुमच्या फर्माइशीवर: {r}." };
 export function templateScript(input: SegmentInput): string {
   RECENT = input.recent ?? [];
-  return templateInner(input);
+  const body = templateInner(input);
+  // A request is always acknowledged, even when the AI writer is unavailable.
+  if (input.request && input.kind !== "switch") return `${REQ_ACK[langKey(isRomantic(input.mode ?? "default") ? "hindi" : input.prefs.language)].replace("{r}", input.request)} ${body}`.trim();
+  return body;
 }
 function templateInner(input: SegmentInput): string {
   const { prefs, next, index, mode = "default" } = input;
@@ -438,6 +446,7 @@ export async function llmScriptWith(input: SegmentInput): Promise<{ text: string
       seg === "sensual_story" ? "This is a STORY break between two songs: the story (70 to 140 words), then one line naming the next song. Do not SKIP." :
       `This is a full break, spoken over the end of one song and the start of the next: 2 to 5 sentences, under ${seg === "story" || seg === "trivia_a" ? 90 : 70} words total.${rom || mode === "focus" ? " If you truly have nothing worth saying, reply SKIP." : " Do not SKIP."}`,
     !stinger && !isSwitch && seg !== "vibe" ? SEGMENT_RULES[seg] : "", // segmentFor() already keeps romantic modes to their own bits
+    input.request ? `The listener just requested this themselves: "${input.request}". Acknowledge their request warmly and briefly (like reading a request line on air), then introduce the next song. Do not claim anything about the song you are not sure of.` : "",
     seg === "trivia_a" && input.trivia ? `The question you asked: "${input.trivia.q}" The correct answer: ${input.trivia.a}.` : "",
     prefs.language === "hindi" || prefs.language === "marathi" ? `Write in ${prefs.language === "hindi" ? "Hindi" : "Marathi"} using Devanagari script (song and artist names may stay in English).` : prefs.language === "hinglish" ? "Write in Hinglish, Roman script." : prefs.language === "spanish" ? "Write in Spanish (song and artist names stay in their original language)." : "Write in English.",
     wantNews ? `Headlines to weave in (pick one or two): ${headlines.slice(0, 3).map((x) => x.title).join(" | ")}` : "No news in this break.",

@@ -43,7 +43,7 @@ test("mid-session Change sheet: mode switch line + new languages", async ({ cont
   await page.goto("/live"); await goLive(page, w);
   await expect.poll(() => w.plays.length, { timeout: 10000 }).toBeGreaterThan(0);
   await page.getByRole("button", { name: "Change" }).click();
-  const sheet = page.locator(".sheet-up");
+  const sheet = page.getByRole("dialog", { name: "Station and songs" });
   await sheet.getByRole("radio", { name: "Gym" }).click();
   await sheet.getByRole("button", { name: "Punjabi", exact: true }).click();
   await page.screenshot({ path: ti.outputPath("change-sheet.png") });

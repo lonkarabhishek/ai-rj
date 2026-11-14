@@ -1,7 +1,7 @@
 "use client";
 /* YouTube source (client): curation from his likes/playlists/imported links + sparing, cached searches; IFrame player wrapper. */
 import { classifyMood } from "./mood";
-import { isOriginal, isRomantic, isSensual, NOT_ROMANTIC_RE, romanticQueries, type ListenMode, type SongLang, type TrackInfo } from "./prefs";
+import { isOriginal, isRomantic, isSensual, NOT_ROMANTIC_RE, romanticQueries, type ListenMode, type SongLang, type Steer, type TrackInfo } from "./prefs";
 export const POOL_KEY = "myrj.yt.pool2";
 
 export interface YtVideo { id: string; title: string; channel: string; seconds: number; image?: string; audioLang?: string; topic?: boolean; lang?: string; src?: "like" | "playlist" | "link" }
@@ -10,6 +10,8 @@ type Tagged = YtVideo & { via?: SongLang | "mode" | "focus"; rec?: boolean };
 const DAY = 24 * 3600e3;
 const SEARCH_CAP = 4; // per session: 4 × 101 units
 let searchesThisSession = 0;
+const REQ_CAP = 12; // listener requests have their own budget (each search costs 101 of 10,000 daily units)
+let requestSearches = 0;
 export let ytQuotaHit = false;
 export function ytSearchesUsed() { return searchesThisSession; }
 
@@ -88,8 +90,12 @@ export class YtCurator {
   private bad: Set<string>;
   private pool: Tagged[] | null = null;
   private langs: SongLang[];
-  constructor(private mode: ListenMode, langs: SongLang[], private links: string[] = [], private seeds: TrackInfo[] = []) {
+  private vibe: string[];
+  /** station: null = the usual mix; "library" = his likes and playlists; a URL = only that imported playlist (plus a few similar finds). */
+  constructor(private mode: ListenMode, langs: SongLang[], private links: string[] = [], private seeds: TrackInfo[] = [], vibe: string[] = [], private station: string | null = null) {
     this.langs = langs.filter((l) => l !== "any");
+    this.vibe = vibe;
+    if (station && station !== "library") this.links = [station];
     let b: string[] = []; try { b = JSON.parse(localStorage.getItem("myrj.yt.bad") || "[]"); } catch { /* ignore */ }
     this.bad = new Set(b);
   }
@@ -103,7 +109,8 @@ export class YtCurator {
       !this.links.length ? Promise.resolve([] as YtVideo[]) : cacheGet<YtVideo[]>(linkKey) ?? fetch("/api/youtube/links", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ urls: this.links }) }).then((r) => r.json()).then((j) => { const v: YtVideo[] = j.videos ?? []; if (v.length) cacheSet(linkKey, v); return v; }).catch(() => [] as YtVideo[]),
     ]);
     const seen = new Set<string>();
-    this.pool = [...links, ...mine].filter((v) => !seen.has(v.id) && !!seen.add(v.id));
+    const src = this.station && this.station !== "library" ? links : [...links, ...mine];
+    this.pool = src.filter((v) => !seen.has(v.id) && !!seen.add(v.id));
     return this.pool;
   }
 
@@ -116,12 +123,12 @@ export class YtCurator {
     return [...n.entries()].sort((a, b) => b[1].c - a[1].c).map(([name, e]) => ({ name, lang: e.lang }));
   }
 
-  private async search(q: string, via: Tagged["via"], focus = false): Promise<Tagged[]> {
+  private async search(q: string, via: Tagged["via"], focus = false, request = false): Promise<Tagged[]> {
     const key = `myrj.yt.sq.${focus ? "f:" : ""}${q}`;
     const c = cacheGet<YtVideo[]>(key);
     if (c) return c.map((v) => ({ ...v, via }));
-    if (searchesThisSession >= SEARCH_CAP || ytQuotaHit) return [];
-    searchesThisSession++;
+    if (ytQuotaHit || (request ? requestSearches >= REQ_CAP : searchesThisSession >= SEARCH_CAP)) return [];
+    if (request) requestSearches++; else searchesThisSession++;
     const r = await fetch(`/api/youtube/search?q=${encodeURIComponent(q)}${focus ? "&focus=1" : ""}`).catch(() => null);
     if (!r?.ok) { if (r?.status === 429) ytQuotaHit = true; return []; }
     const v: YtVideo[] = (await r.json()).videos ?? [];
@@ -173,13 +180,16 @@ export class YtCurator {
     const pool = (await this.loadPool()).filter((v) => this.ok(v));
     // His own library is the main source: likes + playlists + imported links.
     const rom = isRomantic(this.mode); // Romantic Hindi: romantic searches only, not the general library
-    let picks: Tagged[] = rom ? [] : [...pool].sort(() => Math.random() - 0.5).slice(0, 6);
+    const vibe = this.vibe.length && this.mode !== "focus";
+    // A mood/genre steer leads (2 of his songs, the rest from the vibe); a playlist station is mostly his playlist.
+    let picks: Tagged[] = rom ? [] : [...pool].sort(() => Math.random() - 0.5).slice(0, vibe ? 2 : this.station ? 8 : 6);
     // Taste-based picks: songs by artists he already has (same language rules), never generic charts while he has artists.
     const want = picks.length >= 4 ? 2 : 10;
     const artists = this.mode === "focus" || rom ? [] : this.topArtists(await this.loadPool())
       .filter((a) => !this.langs.length || (a.lang ? this.langs.includes(a.lang) : this.langs.length === 1))
       .slice(0, 12).sort(() => Math.random() - 0.5).slice(0, picks.length >= 4 ? 1 : 2);
-    const qs: [string, Tagged["via"]][] = artists.map((a) => [`${a.name} songs`, a.lang ?? (this.langs[0] ?? "mode")]);
+    const qs: [string, Tagged["via"]][] = vibe ? [...this.vibe].sort(() => Math.random() - 0.5).slice(0, 2).map((q) => [q, "mode"] as [string, Tagged["via"]])
+      : artists.map((a) => [`${a.name} songs`, a.lang ?? (this.langs[0] ?? "mode")]);
     if (rom) { for (const q of [...romanticQueries(this.mode)].sort(() => Math.random() - 0.5).slice(0, 2)) qs.push([q, "hindi"]); }
     else if (!qs.length && picks.length < 4) {
       const langs: SongLang[] = this.langs.length ? [...this.langs].sort(() => Math.random() - 0.5) : ["any"];
@@ -191,14 +201,38 @@ export class YtCurator {
     if (qs.length) {
       const found = (await Promise.all(qs.slice(0, 2).map(([q, via]) => this.search(q, via, this.mode === "focus")))).flat().filter((v) => this.ok(v));
       const seen = new Set(picks.map((p) => p.id));
-      const recs = found.filter((v) => !seen.has(v.id) && !!seen.add(v.id)).sort(() => Math.random() - 0.5).slice(0, want).map((v) => ({ ...v, rec: true }));
+      const nRec = vibe ? 10 : this.station ? Math.min(want, 2) : want;
+      const recs = found.filter((v) => !seen.has(v.id) && !!seen.add(v.id)).sort(() => Math.random() - 0.5).slice(0, nRec).map((v) => ({ ...v, rec: true }));
       // Interleave: ~3 of his songs, then 1 recommendation.
       const out: Tagged[] = [];
-      while (picks.length || recs.length) { out.push(...picks.splice(0, 3)); if (recs.length) out.push(recs.shift()!); }
+      if (vibe) while (picks.length || recs.length) { out.push(...recs.splice(0, 3)); if (picks.length) out.push(picks.shift()!); }
+      else while (picks.length || recs.length) { out.push(...picks.splice(0, 3)); if (recs.length) out.push(recs.shift()!); }
       picks = out;
     }
     this.queue.push(...picks.map(toTrack));
   }
+
+  /** Listener request: new vibe from now on; with a named song, that song is found and returned (to play next). Language filters are relaxed: they asked for it. */
+  async steer(s: Steer): Promise<TrackInfo | null> {
+    this.vibe = s.queries.slice(0, 4);
+    let song: TrackInfo | null = null;
+    const relaxed = (v: Tagged) => looksLikeSong(v) && v.seconds <= 900 && !this.bad.has(v.id);
+    if (s.song?.title) {
+      const found = await this.search(`${s.song.title} ${s.song.artist}`.trim(), "mode", false, true);
+      const want = `${s.song.title} ${s.song.artist}`.toLowerCase();
+      const scored = found.filter(relaxed).map((v) => ({ v, sc: wordHits(want, `${v.title} ${v.channel}`) + (isOriginal(v.title) ? 0.5 : 0) })).sort((a, b) => b.sc - a.sc);
+      if (scored[0] && scored[0].sc >= 1) song = toTrack(scored[0].v);
+    }
+    const more = (await Promise.all(this.vibe.slice(0, 2).map((q) => this.search(q, "mode", false, true)))).flat()
+      .filter((v) => relaxed(v) && isOriginal(v.title) && v.id !== song?.ytId && !this.played.has(`yt:${v.id}`));
+    const seen = new Set<string>();
+    const fresh = more.filter((v) => !seen.has(v.id) && !!seen.add(v.id)).sort(() => Math.random() - 0.5).slice(0, 12).map(toTrack);
+    if (fresh.length) this.queue = fresh; // the new vibe starts with the very next song
+    return song;
+  }
+  /** Puts tracks at the front of the queue (previous song, a request). */
+  pushFront(...t: TrackInfo[]) { const ids = new Set(t.map((x) => x.uri)); this.queue = [...t, ...this.queue.filter((x) => !ids.has(x.uri))]; for (const x of t) if (x.uri) this.played.delete(x.uri); }
+  upcoming(n = 8) { return this.queue.slice(0, n); }
 
   async next(): Promise<TrackInfo | null> {
     if (this.queue.length < 2) await this.refill().catch(() => {});
@@ -208,6 +242,11 @@ export class YtCurator {
     return t;
   }
   peek() { return this.queue[0] ?? null; }
+}
+function wordHits(want: string, have: string) {
+  const W = new Set(have.toLowerCase().split(/[^\p{L}\p{N}]+/u));
+  const ws = want.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1);
+  return ws.length ? ws.filter((w) => W.has(w)).length / ws.length * 2 : 0;
 }
 function matchesLangsFocus(v: Tagged, langs: SongLang[]) {
   if (!langs.length) return true;

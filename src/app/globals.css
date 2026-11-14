@@ -1,14 +1,14 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
   --color-accent: #f3efe8;
   --color-accent-strong: #f3efe8;
 }
 
 :root { color-scheme: dark; }
-html, body { background: #0a0908; color: #f3efe8; -webkit-font-smoothing: antialiased; }
+html, body { background: #050b1c; color: #f2f6ff; -webkit-font-smoothing: antialiased; }
 body { font-family: var(--font-sans); letter-spacing: -0.005em; }
 ::selection { background: #f3efe833; }
 
@@ -27,6 +27,7 @@ body { font-family: var(--font-sans); letter-spacing: -0.005em; }
 
 @keyframes eq { 0%, 100% { transform: scaleY(0.3); } 50% { transform: scaleY(1.2); } }
 @keyframes fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes sheet-up { from { transform: translateY(100%); } to { transform: none; } }
 @keyframes breathe { 0%, 100% { transform: scale(1); opacity: .9; } 50% { transform: scale(1.04); opacity: 1; } }
 .fade-up { animation: fade-up .5s cubic-bezier(.2,.8,.2,1) both; }
@@ -218,3 +219,109 @@ button, [role="radio"], [role="button"], .no-select { -webkit-user-select: none;
 }
 /* Low-power hint: when the page is hidden or the show is paused nothing should be animating. */
 .is-paused .art-img, .is-paused::after { animation-play-state: paused !important; }
+
+
+/* =====================================================================================================
+   Liquid Glass, midnight blue. Deep navy base, blue ambient light, glossy frosted surfaces.
+   The current cover's colour (--art, registered so it animates) tints the glow behind everything.
+   ===================================================================================================== */
+@property --art { syntax: "<color>"; inherits: true; initial-value: rgb(58 102 214); }
+:root { --tint-a: 96 150 255; --tint-b: 120 110 255; --navy: 5 11 28; }
+[data-mode="gym"] { --tint-a: 90 170 255; --tint-b: 255 120 160; }
+[data-mode="drive"] { --tint-a: 80 200 255; --tint-b: 110 130 255; }
+[data-mode="focus"] { --tint-a: 90 210 220; --tint-b: 100 130 240; }
+[data-mode^="romantic"] { --tint-a: 140 120 255; --tint-b: 255 110 170; }
+
+.now-playing { transition: --art 1.2s ease; background:
+  radial-gradient(120% 70% at 50% -10%, rgb(30 60 140 / .55), transparent 60%),
+  radial-gradient(90% 60% at 100% 100%, rgb(20 40 110 / .45), transparent 70%),
+  linear-gradient(180deg, #071233 0%, #050b1c 55%, #03070f 100%); }
+.ambient::before { background:
+    radial-gradient(42% 34% at 18% 8%, rgb(110 160 255 / .10), transparent 70%),
+    radial-gradient(36% 30% at 88% 34%, rgb(90 120 255 / .08), transparent 70%); }
+.ambient::after { opacity: .045; }
+.art-ambient { position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: radial-gradient(70% 45% at 50% 28%, color-mix(in srgb, var(--art) 55%, transparent), transparent 72%),
+              radial-gradient(60% 40% at 50% 85%, color-mix(in srgb, var(--art) 22%, transparent), transparent 75%);
+  transition: --art 1.2s ease, opacity .8s ease; }
+.art-backdrop { opacity: .28; filter: blur(60px) saturate(140%); transform: scale(1.35); animation: backdrop-in 1.2s ease both; }
+@keyframes backdrop-in { from { opacity: 0; } to { opacity: .28; } }
+
+.glass {
+  background: linear-gradient(180deg, rgb(255 255 255 / .11), rgb(255 255 255 / .04));
+  border: 1px solid rgb(255 255 255 / .12);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / .16), 0 10px 30px -18px rgb(0 8 30 / .8);
+  backdrop-filter: blur(16px) saturate(160%); -webkit-backdrop-filter: blur(16px) saturate(160%);
+}
+.liquid-glass {
+  background: linear-gradient(180deg, rgb(255 255 255 / .14), rgb(255 255 255 / .05)), rgb(10 22 56 / .55);
+  border: 1px solid rgb(255 255 255 / .14);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / .22), inset 0 -1px 0 rgb(255 255 255 / .05), 0 14px 40px -12px rgb(0 6 24 / .75);
+  backdrop-filter: blur(22px) saturate(180%); -webkit-backdrop-filter: blur(22px) saturate(180%);
+}
+.glass-sheet {
+  background: linear-gradient(180deg, rgb(26 40 84 / .86), rgb(8 15 38 / .95));
+  border-top: 1px solid rgb(255 255 255 / .16);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / .14), 0 -24px 60px -20px rgb(0 0 0 / .8);
+  backdrop-filter: blur(26px) saturate(170%); -webkit-backdrop-filter: blur(26px) saturate(170%);
+}
+/* The full-height shell fades in without moving: a translate would scroll the page for a moment, and a filled transform
+   animation would override .is-behind below. */
+main > .player-shell { animation: fade-in .45s ease both; }
+.player-shell { transition: transform .45s cubic-bezier(.2,.8,.2,1), filter .45s ease, opacity .45s ease; transform-origin: 50% 0; }
+.player-shell.is-behind { transform: scale(.94) translateY(10px); filter: brightness(.7); border-radius: 24px; }
+
+/* cover art */
+.art-card { position: relative; background: #0b1630;
+  box-shadow: 0 1px 0 rgb(255 255 255 / .18) inset, 0 40px 80px -30px color-mix(in srgb, var(--art) 70%, #000), 0 18px 40px -20px rgb(0 0 0 / .8);
+  transition: transform .6s cubic-bezier(.2,.8,.2,1), filter .6s ease; }
+.art-card.is-breathing { animation: breathe-art 6s ease-in-out infinite; }
+.art-card.is-dim { transform: scale(.92); filter: saturate(.75) brightness(.85); }
+@keyframes breathe-art { 0%, 100% { transform: translate3d(0,0,0) scale(1); } 50% { transform: translate3d(0,-3px,0) scale(1.012); } }
+.art-gloss { position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: linear-gradient(155deg, rgb(255 255 255 / .22), transparent 32%), linear-gradient(0deg, rgb(0 0 0 / .18), transparent 40%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / .12); }
+.art-img-in { animation: img-in .6s ease both; }
+@keyframes img-in { from { opacity: 0; filter: blur(10px); } to { opacity: 1; filter: none; } }
+.dj-card { background: radial-gradient(80% 70% at 30% 20%, rgb(80 130 255 / .35), transparent 70%), radial-gradient(70% 60% at 80% 100%, rgb(130 100 255 / .3), transparent 70%), linear-gradient(160deg, #10224f, #070f26); }
+.idle-hero { background: linear-gradient(160deg, rgb(255 255 255 / .12), rgb(255 255 255 / .03)); border: 1px solid rgb(255 255 255 / .14); box-shadow: inset 0 1px 0 rgb(255 255 255 / .2), 0 30px 60px -30px rgb(40 90 255 / .5); }
+
+/* controls */
+.play-btn { background: linear-gradient(180deg, #ffffff, #dfe8ff); color: #06102a; box-shadow: 0 1px 0 #fff inset, 0 14px 40px -12px color-mix(in srgb, var(--art) 80%, #000), 0 0 0 6px rgb(255 255 255 / .06); }
+.play-btn::before { border-color: rgb(var(--tint-a) / .6); }
+.transport-btn { color: #f2f6ff; }
+.transport-btn:not(:disabled):active { background: rgb(255 255 255 / .1); transform: scale(.9); }
+.go-live { background: linear-gradient(180deg, #ffffff, #dbe6ff); color: #06102a; box-shadow: 0 1px 0 #fff inset, 0 16px 44px -14px rgb(70 120 255 / .7); }
+.dock-btn { color: rgb(220 230 255 / .85); }
+.progress-track { background: rgb(255 255 255 / .14); }
+.progress-fill { background: linear-gradient(90deg, #ffffff, color-mix(in srgb, var(--art) 50%, #cfe0ff)); }
+.vol-slider { accent-color: #e8efff; }
+.viz span { background: linear-gradient(180deg, #e8efff, color-mix(in srgb, var(--art) 60%, #7fa6ff)); }
+.video-tile { box-shadow: inset 0 0 0 1px rgb(255 255 255 / .14), 0 20px 40px -20px rgb(0 0 0 / .8); }
+
+/* sheets, lists, chips */
+.sheet { will-change: transform; }
+.grouped { overflow: hidden; border-radius: 20px; background: rgb(255 255 255 / .06); border: 1px solid rgb(255 255 255 / .08); }
+.list-row + .list-row { border-top: 1px solid rgb(255 255 255 / .07); }
+.list-row.is-on { background: rgb(120 160 255 / .1); }
+.list-row:active { background: rgb(255 255 255 / .06); }
+.tag-chip { background: rgb(255 255 255 / .07); border: 1px solid rgb(255 255 255 / .1); color: rgb(225 233 255 / .9); }
+.tag-chip.is-on { background: linear-gradient(180deg, #ffffff, #dbe6ff); color: #06102a; border-color: transparent; box-shadow: 0 8px 22px -10px rgb(90 140 255 / .8); }
+.request-field { background: rgb(255 255 255 / .08); border: 1px solid rgb(255 255 255 / .12); box-shadow: inset 0 1px 0 rgb(255 255 255 / .1); }
+.request-field:focus-within { border-color: rgb(160 190 255 / .55); }
+.mini-player { background: linear-gradient(180deg, rgb(255 255 255 / .14), rgb(255 255 255 / .06)), rgb(12 24 60 / .7); border: 1px solid rgb(255 255 255 / .14); box-shadow: inset 0 1px 0 rgb(255 255 255 / .2), 0 12px 30px -12px rgb(0 0 0 / .7); }
+
+/* lyrics */
+.lyrics-screen { background: radial-gradient(90% 60% at 50% 0%, rgb(var(--art-rgb) / .45), transparent 70%), linear-gradient(180deg, #071233, #03070f); }
+.lyrics-list { -webkit-mask-image: linear-gradient(transparent, #000 18%, #000 78%, transparent); mask-image: linear-gradient(transparent, #000 18%, #000 78%, transparent); }
+.lyric-line { transition: color .45s ease, opacity .45s ease, transform .45s cubic-bezier(.2,.8,.2,1), filter .45s ease; transform-origin: left center; }
+.lyric-line.is-active { color: #fff; opacity: 1; transform: scale(1.02); text-shadow: 0 0 24px rgb(170 200 255 / .45); }
+.lyric-line.is-past { color: #fff; opacity: .32; filter: blur(.4px); }
+.lyric-line.is-next { color: #fff; opacity: .55; }
+.lyric-word { opacity: .45; transition: opacity .2s ease, text-shadow .2s ease; }
+.lyric-word.is-sung { opacity: 1; text-shadow: 0 0 18px rgb(190 210 255 / .7); }
+
+@media (prefers-reduced-motion: reduce) {
+  .art-card.is-breathing, .art-backdrop { animation: none !important; }
+  .player-shell { transition: none; }
+}

@@ -47,6 +47,7 @@ This copy is set up to run as a personal radio with no monthly cost:
 - **Languages:** English and Spanish, plus the original Hindi, Hinglish and Marathi.
 - **Music:** Spotify and YouTube, exactly as before.
 - **Phone:** frosted-glass player with a thumb-reach dock, installable to the iPhone home screen (Share → Add to Home Screen).
+- **Now Playing:** midnight-blue Liquid Glass player with real album covers, swipe transitions, fullscreen synced lyrics (LRCLIB), song/mood requests, mood and genre tags, and playlist stations. See [docs/NOW-PLAYING.md](docs/NOW-PLAYING.md).
 
 Start here: **[docs/FREE-SETUP.md](docs/FREE-SETUP.md)** (every environment variable, redirect URLs, Vercel steps, free-tier limits) and **[docs/VOICES.md](docs/VOICES.md)** (voice options compared, what is implemented, how to run your own voice server).
 

@@ -41,7 +41,7 @@ export async function setupYt(page: Page, o: { songSec?: number; connected?: boo
   for (const v of [...(o.pool ?? []), ...(o.links ?? [])]) w.add(v);
   const out = (v: FV) => ({ id: v.id, title: v.title, channel: v.channel, seconds: v.seconds, audioLang: v.audioLang, lang: v.label });
   await page.route("https://www.youtube.com/iframe_api", (r) => r.fulfill({ contentType: "application/javascript", body: SDK(o.songSec ?? 20) }));
-  await page.route(/https:\/\/(www\.)?(youtube\.com|googleapis\.com|ytimg\.com)\/.*/, (r) => r.request().url().includes("iframe_api") ? r.fallback() : r.fulfill({ status: 204 }));
+  await page.route(/https:\/\/([a-z0-9-]+\.)?(youtube\.com|googleapis\.com|ytimg\.com)\/.*/, (r) => r.request().url().includes("iframe_api") ? r.fallback() : r.fulfill({ status: 204 }));
   await page.route("**/__yt/load**", (r) => { w.loads.push({ t: Date.now(), id: new URL(r.request().url()).searchParams.get("id")! }); r.fulfill({ status: 204 }); });
   await page.route("**/api/songmood", async (r) => {
     w.moodCalls++; await new Promise((x) => setTimeout(x, 250));

@@ -227,7 +227,7 @@ export function ExternalPlaylists({ p, up }: { p: Prefs; up: Up }) {
   return (
     <div className="space-y-2">
       <form onSubmit={(e) => { e.preventDefault(); if (v.trim()) up("externalPlaylists", [...p.externalPlaylists, { url: v.trim(), addedAt: new Date().toISOString() }]); setV(""); }}>
-        <input className={inputCls} placeholder="Paste a YouTube Music, Apple Music or JioSaavn link" value={v} onChange={(e) => setV(e.target.value)} />
+        <input className={inputCls} placeholder="Paste a YouTube or YouTube Music playlist link" value={v} onChange={(e) => setV(e.target.value)} inputMode="url" enterKeyHint="done" />
       </form>
       {p.externalPlaylists.map((x, i) => (
         <div key={i} className="flex items-center justify-between gap-2 text-sm text-zinc-400">
@@ -274,6 +274,13 @@ async function shrink(file: File): Promise<string> {
 
 /** Match songs on Spotify and add new ones to taste seeds. Returns a human summary. */
 async function addSongs(songs: { title: string; artist: string }[], p: Prefs, up: Up, setBusy: (s: string) => void) {
+  if (p.music === "youtube") {
+    // YouTube listeners: keep the songs as taste seeds by name (their artists steer the radio's searches); no Spotify needed.
+    const have = new Set(p.tasteSeeds.map((t) => t.uri));
+    const fresh = songs.map((s) => ({ name: s.title, artists: s.artist, uri: `seed:${s.title}|${s.artist}`.toLowerCase() })).filter((t) => !have.has(t.uri) && (have.add(t.uri), true));
+    up("tasteSeeds", [...fresh, ...p.tasteSeeds].slice(0, 300));
+    return `Added ${fresh.length} song${fresh.length === 1 ? "" : "s"}. Your radio will lean towards these artists.`;
+  }
   setBusy(`Found ${songs.length} songs. Matching on Spotify…`);
   const { matchTrack } = await import("@/lib/spotifyClient");
   const matched: TrackInfo[] = [];
@@ -331,6 +338,14 @@ export function MusicImport({ p, up }: { p: Prefs; up: Up }) {
 
   async function run(files: File[] = []) {
     if (!files.length && !text.trim()) { fileRef.current?.click(); return; }
+    // A YouTube playlist link on the YouTube source becomes a station of its own (read from the public page, no quota).
+    const links = p.music === "youtube" ? (text.match(/https?:\/\/\S*(youtube\.com|youtu\.be)\S*[?&]list=[\w-]+\S*/gi) ?? []) : [];
+    if (links.length && !files.length && !text.replace(/https?:\/\/\S+/g, "").trim()) {
+      const have = new Set(p.externalPlaylists.map((x) => x.url));
+      const add = links.filter((u) => !have.has(u)).map((url) => ({ url, addedAt: new Date().toISOString() }));
+      up("externalPlaylists", [...p.externalPlaylists, ...add]);
+      setText(""); setMsg(add.length ? "Playlist added. Pick it under Library → Station to play it." : "That playlist is already added."); return;
+    }
     setMsg(""); setBusy(files.length ? "Reading your screenshots…" : "Reading…");
     try {
       const images = await Promise.all(files.slice(0, 6).map(shrink));

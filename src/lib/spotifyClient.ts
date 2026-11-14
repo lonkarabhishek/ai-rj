@@ -1,6 +1,6 @@
 "use client";
 import { classifyMood } from "./mood";
-import { isOriginal, isRomantic, isSensual, NOT_ROMANTIC_RE, romanticQueries, type ListenMode, type SongLang, type TrackInfo } from "./prefs";
+import { isOriginal, isRomantic, isSensual, NOT_ROMANTIC_RE, romanticQueries, type ListenMode, type SongLang, type Steer, type TrackInfo } from "./prefs";
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -530,4 +530,15 @@ export class Curator {
   }
   relaxed = false;
   peek() { return this.queue[0] ?? null; }
+  upcoming(n = 8) { return this.queue.slice(0, n); }
+  pushFront(...t: TrackInfo[]) { const ids = new Set(t.map((x) => x.uri)); this.queue = [...t, ...this.queue.filter((x) => !ids.has(x.uri))]; for (const x of t) if (x.uri) this.played.delete(x.uri); }
+  /** Listener request: the named song (if any) to play next, and a queue rebuilt from the request's vibe. */
+  async steer(s: Steer): Promise<TrackInfo | null> {
+    this.searchBudget = Math.max(this.searchBudget, 3);
+    const song = s.song?.title ? await matchTrack(s.song.title, s.song.artist).catch(() => null) : null;
+    const items = (await Promise.all(s.queries.slice(0, 2).map((q) => this.search(q, 10, 20)))).flat();
+    const fresh = this.map(items).filter((t) => t.uri && t.uri !== song?.uri && !this.played.has(t.uri)).sort(() => Math.random() - 0.5).slice(0, 12);
+    if (fresh.length) this.queue = fresh;
+    return song;
+  }
 }
