@@ -51,3 +51,16 @@ export async function POST(req: Request) {
     code: !configured ? "not_configured" : quota ? "quota_exceeded" : "all_failed", failures,
   }, { status: 502 });
 }
+
+/** GET: voice health check. Speaks one short word with Gemini and reports what happened (no keys, no audio). Rate-limited. */
+export async function GET(req: Request) {
+  const no = guard(req, "tts-health", 4); if (no) return no;
+  if (!geminiTtsEnabled()) return Response.json({ gemini: "not_configured" });
+  const t = Date.now();
+  try {
+    const { audio, mime } = await geminiTts("Hello.", undefined, "balanced", "default");
+    return Response.json({ gemini: "ok", bytes: audio.byteLength, mime, ms: Date.now() - t });
+  } catch (e) {
+    return Response.json({ gemini: e instanceof TtsError ? e.code : "error", detail: e instanceof Error ? e.message.slice(0, 200) : "", ms: Date.now() - t });
+  }
+}
