@@ -97,3 +97,11 @@ browser allows it without re-routing the audio; elsewhere the DJ indicator uses 
 `tests/e2e/player.spec.ts` covers: cover art with the YouTube video window still visible, art failure → fallback art,
 swipe next and previous, rapid Next taps, lyrics following the player clock through pause and seek, a song request with
 the DJ acknowledging it and similar songs after, a mood tag, a playlist station, and Previous on Spotify.
+
+## Car mode and background play
+
+iPhone freezes a web page when the screen locks or you switch apps, so MyRJ can't start the next song or DJ break until
+it's back on screen. Car mode (the "Car" button while live) hides everything except the cover, title and three big
+buttons, and keeps the screen awake with the Screen Wake Lock API (re-requested whenever the page comes back). If the
+browser refuses the wake lock, it tells the listener to set Auto-Lock to Never while driving. When the page comes back
+after iOS paused the YouTube player, the song resumes on its own, or shows "Tap to play" if iOS blocks that.

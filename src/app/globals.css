@@ -325,3 +325,12 @@ main > .player-shell { animation: fade-in .45s ease both; }
   .art-card.is-breathing, .art-backdrop { animation: none !important; }
   .player-shell { transition: none; }
 }
+
+/* ── Car mode: title, cover and three big buttons. The YouTube video window keeps its size (YouTube's rule). ── */
+main[data-car] .car-hide { display: none !important; }
+main[data-car] .transport-btn { width: 80px; height: 80px; }
+main[data-car] .transport-btn svg { width: 36px; height: 36px; }
+main[data-car] .play-btn { width: 104px; height: 104px; }
+main[data-car] .play-btn svg { width: 38px; height: 38px; }
+main[data-car] [data-testid="now-title"] { font-size: 30px; line-height: 1.15; }
+main[data-car] .art-backdrop { opacity: .18; }

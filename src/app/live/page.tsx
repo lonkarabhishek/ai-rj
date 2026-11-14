@@ -64,6 +64,10 @@ function LiveInner() {
   const [diag, setDiagState] = useState<Diag>({ log: [] });
   const [showDiag, setShowDiag] = useState(false);
   const [drawer, setDrawer] = useState(false);
+  const [car, setCar] = useState(false); // Car mode: big controls, nothing else, screen kept awake
+  const [wakeOk, setWakeOk] = useState<boolean | null>(null); // did the browser agree to keep the screen on?
+  useEffect(() => { try { setCar(localStorage.getItem("myrj.car") === "1"); } catch { /* ignore */ } }, []);
+  const toggleCar = (v: boolean) => { setCar(v); try { localStorage.setItem("myrj.car", v ? "1" : "0"); } catch { /* ignore */ } if (v) requestWake(); };
   const [needReconnect, setNeedReconnect] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   // ---- Now Playing extras: cover art, swipe direction, lyrics, sheets, requests ----
@@ -231,6 +235,10 @@ function LiveInner() {
     const onVis = () => {
       if (document.visibilityState !== "visible" || phaseRef.current === "idle") return;
       requestWake(); // the wake lock is dropped whenever Safari goes to the background
+      // iOS pauses the YouTube player when the app goes to the background: pick the song up again (or show "Tap to play").
+      if (!pausedRef.current && phaseRef.current === "song" && outRef.current === "youtube" && yt().state === 2) {
+        yt().play(); setTimeout(() => { if (!pausedRef.current && yt().state === 2) setYtStalled(true); }, 1200);
+      }
       if (ctxRef.current && ctxRef.current.state !== "running" && !pausedRef.current) ctxRef.current.resume().catch(() => {});
       // iOS pauses the device voice and our voice clip when the tab is hidden: pick both up again unless the listener paused the show.
       if (!pausedRef.current) {
@@ -319,7 +327,13 @@ function LiveInner() {
   useEffect(() => { phaseRef.current = phase; if (phase !== "tuning") setBoot(null); }, [phase]);
 
   async function requestWake() {
-    try { wakeRef.current = await (navigator as any).wakeLock?.request("screen"); } catch { /* not supported */ }
+    try {
+      const w = (navigator as any).wakeLock;
+      if (!w) { setWakeOk(false); return; }
+      if (wakeRef.current && !wakeRef.current.released) { setWakeOk(true); return; }
+      wakeRef.current = await w.request("screen"); setWakeOk(true);
+      wakeRef.current.addEventListener?.("release", () => { if (document.visibilityState === "visible" && phaseRef.current !== "idle") requestWake(); });
+    } catch { setWakeOk(false); }
   }
 
   const setPausedState = (v: boolean) => {
@@ -1343,7 +1357,7 @@ function LiveInner() {
   const sheetOpen = !!sheet || drawer || picker;
 
   return (
-    <main data-mode={listenMode} className="ambient now-playing relative min-h-dvh w-full overflow-x-clip" style={{ ["--art" as string]: `rgb(${artRgb})` }}
+    <main data-mode={listenMode} data-car={car && live ? "" : undefined} className="ambient now-playing relative min-h-dvh w-full overflow-x-clip" style={{ ["--art" as string]: `rgb(${artRgb})` }}
       onClick={() => notice?.startsWith("Tap anywhere") && setNotice(null)}>
       <div aria-hidden className={cx("aurora", live && "is-live", (paused || !live) && "is-paused")}><i /><i /></div>
       <div aria-hidden className="art-ambient" />
@@ -1356,14 +1370,18 @@ function LiveInner() {
           </Link>
           <div className="flex items-center gap-2">
             {live && <span className="live-badge flex items-center gap-1.5 rounded-full bg-[#ff4d6d]/15 px-2.5 py-1 text-[11px] font-semibold tracking-wider text-[#ff8fa3]"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#ff5c7a]" />LIVE</span>}
-            <button onClick={() => setDrawer(true)} className="glass flex h-11 w-11 items-center justify-center rounded-full text-white/80 hover:text-white" aria-label="Edit RJ">
+            {live && <button onClick={() => toggleCar(!car)} aria-pressed={car} data-testid="car-toggle" className={cx("glass flex h-11 items-center gap-1.5 rounded-full px-3.5 text-[13px] font-medium", car ? "text-[#06102a] !bg-[#e8efff]" : "text-white/80 hover:text-white")} aria-label={car ? "Exit car mode" : "Car mode"}>
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M5 16V11l2-5h10l2 5v5M5 16h14M5 16v2.5M19 16v2.5M3.5 10.5H5M19 10.5h1.5" /><circle cx="8" cy="13.5" r=".6" fill="currentColor" /><circle cx="16" cy="13.5" r=".6" fill="currentColor" /></svg>
+              {car ? "Exit" : "Car"}
+            </button>}
+            <button onClick={() => setDrawer(true)} className="car-hide glass flex h-11 w-11 items-center justify-center rounded-full text-white/80 hover:text-white" aria-label="Edit RJ">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden><path d="M4 6h16M4 12h10M4 18h6" strokeLinecap="round" /></svg>
             </button>
           </div>
         </header>
 
         {live && (
-          <div className="mt-1 flex items-center justify-center gap-2 text-[13px] text-white/55" data-testid="station-line">
+          <div className="car-hide mt-1 flex items-center justify-center gap-2 text-[13px] text-white/55" data-testid="station-line">
             <span className="text-white/80">{modeInfo(listenMode).label}</span><span className="text-white/25">·</span>
             <span className="max-w-[40%] truncate">{prefs.station ? (prefs.station === "library" ? "My library" : "Playlist") : isRomantic(listenMode) ? "Hindi only" : (prefs.vibeTags?.length ? prefs.vibeTags.map((x) => VIBE_TAGS.find((y) => y.id === x)?.label).join(", ") : langSummary(prefs.songLangs))}</span>
             <span className="text-white/25">·</span><span className="truncate">with {rjName}</span>
@@ -1465,7 +1483,7 @@ function LiveInner() {
         )}
 
         {upNext && live && !ytShow && !talking && (
-          <button onClick={() => setSheet("library")} className="glass mb-4 flex items-center gap-3 rounded-2xl p-2.5 text-left [@media(max-height:760px)]:hidden" aria-label={`Coming up: ${upNext.name}`}>
+          <button onClick={() => setSheet("library")} className="car-hide glass mb-4 flex items-center gap-3 rounded-2xl p-2.5 text-left [@media(max-height:760px)]:hidden" aria-label={`Coming up: ${upNext.name}`}>
             {upNext.image ? <img src={upNext.image} alt="" className="h-10 w-10 rounded-lg object-cover" /> : <div className="h-10 w-10 rounded-lg bg-white/10" />}
             <div className="min-w-0 flex-1">
               <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-white/45">Up next</p>
@@ -1501,7 +1519,9 @@ function LiveInner() {
                 </label>
               )}
               {/* dock: everything else, thumb-reachable */}
-              <div className="liquid-glass dock flex w-full items-center justify-between" data-testid="dock">
+              {car && wakeOk === false && <p className="text-center text-[13px] leading-snug text-[#ffd479]" data-testid="car-wake-tip">This phone won&apos;t keep the screen on by itself. Set Settings → Display &amp; Brightness → Auto-Lock → Never while you drive, and keep MyRJ on screen.</p>}
+              {car && wakeOk !== false && <p className="text-center text-[12px] text-white/45" data-testid="car-tip">Screen stays on. Keep MyRJ on screen: if you lock the phone or switch apps, the radio waits until you come back.</p>}
+              <div className="car-hide liquid-glass dock flex w-full items-center justify-between" data-testid="dock">
                 <DockBtn label="Request a song or mood" text="Request" onClick={() => setSheet("discover")} icon={<path d="M12 3.5 13.9 8l4.6.4-3.5 3 1.1 4.5L12 13.5 7.9 15.9 9 11.4l-3.5-3L10.1 8 12 3.5ZM5 19.5h14" />} />
                 <DockBtn label="Library and playlists" text="Library" onClick={() => setSheet("library")} icon={<path d="M5 4.5v15M9.5 4.5v15M14 5l4.5 14" />} />
                 <DockBtn label="Station and songs" text="Station" onClick={openPicker} icon={DOCK_ICONS[listenMode]} />
@@ -1514,7 +1534,7 @@ function LiveInner() {
           )}
         </div>
 
-        <button aria-expanded={showDiag} onClick={() => setShowDiag((v) => !v)} className="mt-3 text-[10px] uppercase tracking-[0.14em] text-white/40 hover:text-white/70">
+        <button aria-expanded={showDiag} onClick={() => setShowDiag((v) => !v)} className="car-hide mt-3 text-[10px] uppercase tracking-[0.14em] text-white/40 hover:text-white/70">
           {diag.error && live ? "● " : ""}Playback details
         </button>
         {showDiag && (
