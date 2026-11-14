@@ -13,7 +13,7 @@ export async function GET(req: Request) {
   const q = new URLSearchParams({ response_type: "code", client_id: process.env.SPOTIFY_CLIENT_ID, scope: SCOPES, redirect_uri: redirectUri, state });
   const res = NextResponse.redirect(`https://accounts.spotify.com/authorize?${q}`);
   const ret = new URL(req.url).searchParams.get("return");
-  if (ret && /^\/[a-z0-9/_?=&-]*$/i.test(ret)) res.cookies.set("sp_return", ret, { ...cookieOpts(), maxAge: 600 });
+  if (ret && /^\/(?!\/)[a-z0-9/_?=&-]*$/i.test(ret)) res.cookies.set("sp_return", ret, { ...cookieOpts(), maxAge: 600 });
   res.cookies.set("sp_state", state, { ...cookieOpts(), maxAge: 600 });
   return res;
 }

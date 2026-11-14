@@ -10,7 +10,9 @@ export const SCOPES = [
 
 // Computed per request (never at module load) so builds work without env vars.
 export function cookieOpts() {
-  return { httpOnly: true, sameSite: "lax" as const, secure: (process.env.SPOTIFY_REDIRECT_URI ?? "").startsWith("https://"), path: "/" };
+  // Secure on any HTTPS deployment (Vercel sets VERCEL=1), even when only YouTube is configured; plain-HTTP local runs keep working.
+  const https = (process.env.SPOTIFY_REDIRECT_URI ?? "").startsWith("https://") || (process.env.GOOGLE_REDIRECT_URI ?? "").startsWith("https://") || !!process.env.VERCEL;
+  return { httpOnly: true, sameSite: "lax" as const, secure: https, path: "/" };
 }
 
 function basic() {
@@ -21,9 +23,9 @@ export async function tokenRequest(params: Record<string, string>) {
   const res = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
     headers: { Authorization: basic(), "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams(params),
+    body: new URLSearchParams(params), signal: AbortSignal.timeout(10000),
   });
-  if (!res.ok) throw new Error(`Spotify token error ${res.status}`);
+  if (!res.ok) throw new Error(`Spotify token error ${res.status}`); // status only: the response body can echo credentials
   return (await res.json()) as { access_token: string; expires_in: number; refresh_token?: string };
 }
 

@@ -2,6 +2,7 @@ import { stripTags } from "@/lib/text";
 export { stripTags };
 import { isRomantic, type Prefs, type TrackInfo, type Humor, type Language, type ListenMode } from "./prefs";
 import type { Headline } from "./news";
+import { geminiEnabled, geminiFastModel, geminiTextChain, geminiTextModels } from "./gemini";
 
 export interface SegmentInput {
   prefs: Prefs;
@@ -43,13 +44,15 @@ const pick = (a: string[]) => {
   return pool[Math.floor(Math.random() * pool.length)];
 };
 
-const GREET: Record<"en" | "hl" | "hi" | "mr", string[]> = {
+const GREET: Record<K, string[]> = {
+  es: ["{rj} de vuelta contigo, {me}", "Aquí seguimos, {me}, con la mejor vibra", "Qué temazo acaba de sonar, {me}", "Bueno {me}, que no pare la música", "Ya sabes cómo es esto, {me}", "{rj} otra vez al micrófono"],
   en: ["{rj} back with you, {me}", "Still here, still vibing, {me}", "That was a good one, {me}", "Okay {me}, keeping the streak going", "You know the drill, {me}", "{rj} on the mic again"],
   hl: ["{rj} wapas aa gaya, {me}", "Kya gaana tha yaar, {me}", "Mood ekdum set hai, {me}", "Chaliye {me}, aage badhte hain", "{rj} phir se mic pe", "Arre {me}, maza aa raha hai na?"],
   hi: ["{rj} फिर से हाज़िर है, {me}", "क्या गाना था, {me}", "मूड बना हुआ है, {me}", "चलिए {me}, आगे बढ़ते हैं"],
   mr: ["{rj} पुन्हा तुमच्यासोबत, {me}", "काय गाणं होतं, {me}", "मूड एकदम सेट आहे, {me}", "चला {me}, पुढे जाऊया"],
 };
-type K = "en" | "hl" | "hi" | "mr";
+type K = "en" | "es" | "hl" | "hi" | "mr";
+const langKey = (l: Language): K => (l === "english" ? "en" : l === "spanish" ? "es" : l === "hinglish" ? "hl" : l === "hindi" ? "hi" : "mr");
 function banter(k: K, hour: number | undefined, me: string): string {
   const h = hour ?? 12;
   const slot = h < 5 ? "late" : h < 12 ? "morning" : h < 17 ? "afternoon" : h < 21 ? "evening" : "late";
@@ -60,6 +63,13 @@ function banter(k: K, hour: number | undefined, me: string): string {
       evening: [`Evening mode on. Shoulders down, volume up.`, `Long day, ${me}? This next stretch is just for you.`],
       late: [`Late night crew, I see you, ${me}.`, `It's late, the city's quiet, and the music's just right.`],
       any: [`Honestly ${me}, your taste in music is elite.`, `If this station had a fan club, you'd be president.`, `Little reminder: drink some water, ${me}.`],
+    },
+    es: {
+      morning: [`Buenos días, ${me}. Primero el café, después el mundo.`, `Mañana fresca, música fresca. Vamos a hacer que hoy cuente.`],
+      afternoon: [`¿Bajón de la tarde? En esta emisora no existe.`, `Medio día hecho, ${me}. Ahora viene la mejor mitad.`],
+      evening: [`Modo tarde activado. Hombros abajo, volumen arriba.`, `¿Día largo, ${me}? Este tramo es solo para ti.`],
+      late: [`A los que siguen despiertos, los veo, ${me}.`, `Es tarde, la ciudad está en silencio y la música suena perfecta.`],
+      any: [`De verdad, ${me}, tienes un gusto musical de lujo.`, `Si esta emisora tuviera club de fans, tú serías presidente.`, `Recordatorio rápido: toma agua, ${me}.`],
     },
     hl: {
       morning: [`Good morning ${me}! Pehle chai, phir duniya.`, `Subah subah ka mood ekdum fresh hai.`],
@@ -82,7 +92,8 @@ function banter(k: K, hour: number | undefined, me: string): string {
   return pick([...B[k][slot], ...B[k].any]);
 }
 
-const UPNEXT: Record<"en" | "hl" | "hi" | "mr", string[]> = {
+const UPNEXT: Record<K, string[]> = {
+  es: ["A continuación, {t}", "Aquí viene {t}", "Sube el volumen, que llega {t}", "Vamos con {t}", "Ahora mismo, {t}"],
   en: ["Up next, {t}", "Here comes {t}", "Turning it up with {t}", "Let's roll into {t}", "Coming right up, {t}"],
   hl: ["Ab sunte hain {t}", "Agla gaana, {t}", "Volume up karo, aa raha hai {t}", "Chalo, {t} bajate hain", "Ye raha {t}"],
   hi: ["अब सुनिए {t}", "अगला गाना, {t}", "आवाज़ बढ़ाइए, आ रहा है {t}"],
@@ -90,24 +101,28 @@ const UPNEXT: Record<"en" | "hl" | "hi" | "mr", string[]> = {
 };
 
 // ---- Jokes (template mode). Keyed by humor; English + Hindi-ish variants.
-const JOKES: Record<Exclude<Humor, "off">, { en: string[]; hi: string[]; mr: string[] }> = {
+const JOKES: Record<Exclude<Humor, "off">, { en: string[]; es: string[]; hi: string[]; mr: string[] }> = {
   clean: {
     en: ["My alarm and I have an agreement. It rings, I ignore it, we both move on.", "I tried to catch some fog this morning. I mist.", "Chai is not a drink, it is a meeting with yourself.", "Why did the playlist go to school? To get a little more class-ical.", "I told my speaker a joke. It didn't laugh, but it did get louder."],
+    es: ["Mi alarma y yo tenemos un acuerdo: ella suena, yo la ignoro, y los dos seguimos con nuestra vida.", "El café no es una bebida, es una reunión contigo mismo.", "Le conté un chiste a mi bocina. No se rió, pero subió el volumen."],
     hi: ["मेरे फोन ने कहा बैटरी लो है, मैंने कहा मैं भी, चलो साथ में चार्ज होते हैं।", "गाना इतना अच्छा है कि मेरा हेडफोन भी नाच रहा है।"],
     mr: ["माझा फोन म्हणाला बॅटरी कमी आहे, मी म्हणालो मी पण, चल एकत्र चार्ज होऊया.", "हे गाणं इतकं भारी आहे की हेडफोन पण नाचतायत."],
   },
   normal: {
-    en: ["Why do we park on a driveway and drive on a parkway? Nobody knows, keep listening.", "My Wi-Fi and I have a lot in common. We both disconnect when things get serious.", "I'm on a seafood diet. I see food, I skip the gym.", "My code works and I have no idea why. Same energy as my love life.", "Traffic in Pune is the only place where patience is a cardio workout."],
+    en: ["Why do we park on a driveway and drive on a parkway? Nobody knows, keep listening.", "My Wi-Fi and I have a lot in common. We both disconnect when things get serious.", "I'm on a seafood diet. I see food, I skip the gym.", "My code works and I have no idea why. Same energy as my love life.", "Traffic is the only place where patience counts as a cardio workout."],
+    es: ["Mi wifi y yo nos parecemos mucho: los dos nos desconectamos cuando la cosa se pone seria.", "Estoy a dieta de mariscos: veo comida y me la como.", "El lunes es como la cuenta de la luz: nadie lo pidió y llega puntual."],
     hi: ["Monday को देखकर लगता है जैसे EMI की तरह हर हफ्ते आ ही जाता है।", "दोस्त बोला diet पर हूँ, फिर समोसा देखा, diet ने खुद resign कर दिया।"],
     mr: ["सोमवार म्हणजे EMI सारखा, दर आठवड्याला येतोच.", "मित्र म्हणाला डाएटवर आहे, मग वडापाव दिसला आणि डाएटने राजीनामा दिला."],
   },
   witty: {
-    en: ["My to-do list and I are in a long-distance relationship. I never see the bottom of it.", "I asked the AI for life advice. It said: have you tried turning yourself off and on again?", "Every startup pitch now: it's like Uber, but for vibes, powered by AI.", "Pune weather has three settings: hot, rain, and confusing.", "AI can write code, compose music and pass exams, but still can't find the one sock the washing machine ate.", "My calendar says I'm productive. My screen time report disagrees, loudly."],
+    en: ["My to-do list and I are in a long-distance relationship. I never see the bottom of it.", "I asked the AI for life advice. It said: have you tried turning yourself off and on again?", "Every startup pitch now: it's like Uber, but for vibes, powered by AI.", "The weather here has three settings: hot, rain, and confusing.", "AI can write code, compose music and pass exams, but still can't find the one sock the washing machine ate.", "My calendar says I'm productive. My screen time report disagrees, loudly."],
+    es: ["Mi lista de pendientes y yo tenemos una relación a distancia: nunca le veo el final.", "La inteligencia artificial escribe código, compone música y aprueba exámenes, pero todavía no encuentra el calcetín que se tragó la lavadora.", "Mi calendario dice que soy productivo. Mi tiempo de pantalla opina otra cosa, y a gritos."],
     hi: ["AI code लिख लेता है, गाने बना लेता है, पर washing machine ने जो मोजा खाया वो आज तक नहीं ढूंढ पाया।", "मेरा calendar कहता है मैं productive हूँ, screen time report कहती है झूठ मत बोल।"],
     mr: ["AI कोड लिहितो, गाणी बनवतो, पण वॉशिंग मशीनने खाल्लेला मोजा अजून सापडला नाही.", "कॅलेंडर म्हणतं मी productive आहे, स्क्रीन टाइम म्हणतो खोटं बोलू नकोस."],
   },
   dark: {
     en: ["My bank balance and my sleep schedule have one thing in common. Both are a cry for help.", "I'm not saying Monday is evil, but it has never once been seen in a mirror.", "I would tell you a joke about my career plans, but it doesn't have a punchline either.", "I told my plants about my deadlines. Two of them are no longer with us.", "They say money can't buy happiness. It can't buy rent either, apparently, so at least it's consistent."],
+    es: ["Mi saldo y mi horario de sueño tienen algo en común: los dos son un grito de auxilio.", "Les conté mis fechas de entrega a mis plantas. Dos de ellas ya no están con nosotros.", "Dicen que el dinero no compra la felicidad. Tampoco la renta, por lo visto, así que al menos es consistente."],
     hi: ["मैंने अपने पौधों को अपनी deadlines बताईं, दो पौधे अब हमारे बीच नहीं रहे।", "कहते हैं पैसा खुशी नहीं खरीद सकता, मेरे पास तो किराया खरीदने लायक भी नहीं, कम से कम consistent तो हूँ।"],
     mr: ["मी माझ्या झाडांना माझ्या deadlines सांगितल्या, दोन झाडं आता आपल्यात नाहीत.", "पैशाने सुख विकत घेता येत नाही म्हणतात, माझ्याकडे भाडं भरण्याइतके पण नाहीत, निदान सातत्य तरी आहे."],
   },
@@ -116,30 +131,36 @@ const JOKES: Record<Exclude<Humor, "off">, { en: string[]; hi: string[]; mr: str
 function jokeFor(humor: Humor, lang: Language) {
   if (humor === "off") return "";
   const set = JOKES[humor];
-  return pick(lang === "english" || lang === "hinglish" ? set.en : lang === "marathi" ? set.mr : set.hi);
+  return pick(lang === "english" || lang === "hinglish" ? set.en : lang === "spanish" ? set.es : lang === "marathi" ? set.mr : set.hi);
 }
 
 function shortTitle(t: string) { return t.length > 140 ? t.slice(0, 140).replace(/\s\S*$/, "") : t; }
 
-function trackLine(t?: TrackInfo | null) {
-  return t ? `"${t.name}" by ${t.artists}` : "";
+/** Only what we were actually given: a missing title means no line at all, a missing artist means the title alone (never a made-up name). */
+function trackLine(t?: TrackInfo | null, lang: Language = "english") {
+  const name = t?.name?.trim(), artists = t?.artists?.trim();
+  if (!name) return "";
+  return artists ? `"${name}" ${lang === "spanish" ? "de" : "by"} ${artists}` : `"${name}"`;
 }
 
-const MODE_LINES: Record<"gym" | "drive" | "focus", Record<"en" | "hi" | "hl" | "mr", string[]>> = {
+const MODE_LINES: Record<"gym" | "drive" | "focus", Record<K, string[]>> = {
   gym: {
     en: ["Stronger than yesterday, {me}. Prove it!", "Your only competition is who you were last week!", "Form first, then fire!", "One more rep, {me}. Pain is temporary, gains are forever!", "No excuses today, {me}. Let's crush this set!", "Breathe, brace, and lift, {me}. You've got this!"],
+    es: ["Más fuerte que ayer, {me}. ¡Demuéstralo!", "Tu única competencia es quien eras la semana pasada.", "Primero la técnica, después el fuego.", "Una repetición más, {me}. El dolor pasa, lo ganado se queda.", "Hoy no hay excusas, {me}. ¡A romper esta serie!", "Respira, aprieta y levanta, {me}. ¡Tú puedes!"],
     hl: ["Kal se strong ho aap, {me}, prove karo!", "Competition sirf pichle hafte waale aap se hai!", "Pehle form, phir fire!", "Ek aur rep, {me}! Dard temporary hai, gains permanent!", "Aaj koi excuse nahi, {me}. Set todo!", "Saans lo, focus karo, aur utha do, {me}!"],
     hi: ["एक और रेप, {me}! दर्द कुछ पल का है, ताकत हमेशा की!", "आज कोई बहाना नहीं, {me}। ये सेट तोड़ दो!"],
     mr: ["अजून एक रेप, {me}! वेदना क्षणभर, ताकद कायमची!", "आज कोणतीही सबब नाही, {me}. हा सेट फोडून टाका!"],
   },
   drive: {
     en: ["Long road, good company, better music.", "If there's traffic, this song is your excuse to sing louder.", "Windows down, volume up, {me}. Sing it like nobody's listening!", "Road's open, {me}. This one's a singalong, don't hold back!"],
+    es: ["Camino largo, buena compañía y mejor música.", "Si hay tráfico, esta canción es tu excusa para cantar más fuerte.", "Ventanas abajo, volumen arriba, {me}. ¡Canta como si nadie escuchara!", "Carretera libre, {me}. Esta es para corearla sin pena."],
     hl: ["Lambi road, achhi company, aur usse bhi achha music.", "Traffic mein phase ho? Toh aur zor se gaao!", "Windows neeche, volume upar, {me}! Gaana zor se gaana!", "Road khula hai, {me}. Is gaane pe singalong compulsory hai!"],
     hi: ["खिड़कियाँ नीचे, आवाज़ ऊपर, {me}! ज़ोर से गाइए!", "सड़क खुली है, {me}। इस गाने पर साथ में गाना ज़रूरी है!"],
     mr: ["खिडक्या खाली, आवाज वर, {me}! मोठ्याने गा!", "रस्ता मोकळा आहे, {me}. या गाण्यावर सोबत गायलंच पाहिजे!"],
   },
   focus: {
     en: ["Staying in the zone with {track}.", "Deep work continues, {me}. Next up, {track}.", "Quiet focus, steady flow. Here's {track}.", "You're doing great, {me}. Keep going with {track}."],
+    es: ["Seguimos en la zona con {track}.", "El trabajo profundo continúa, {me}. Ahora, {track}.", "Calma, enfoque y buen ritmo. Aquí va {track}.", "Vas muy bien, {me}. Sigue con {track}."],
     hl: ["Focus mode on, {me}. Ab {track}.", "Zone mein raho, {me}. Next, {track}.", "Kaam chalta rahe, {me}. Saath mein {track}.", "Badhiya chal raha hai, {me}. Ab {track}."],
     hi: ["फोकस बनाए रखिए, {me}। अब {track}।"],
     mr: ["लक्ष केंद्रित ठेवा, {me}. आता {track}."],
@@ -153,21 +174,21 @@ export function templateScript(input: SegmentInput): string {
 function templateInner(input: SegmentInput): string {
   const { prefs, next, index, mode = "default" } = input;
   if (input.kind === "switch") {
-    const k: K = prefs.language === "english" ? "en" : prefs.language === "hinglish" ? "hl" : prefs.language === "hindi" ? "hi" : "mr";
+    const k: K = langKey(prefs.language);
     const L: Record<ListenMode, Record<K, string>> = {
-      gym: { en: "Gym mode on. Let's lift!", hl: "Gym mode on! Chalo, utha do!", hi: "जिम मोड ऑन! चलो, जोश दिखाओ!", mr: "जिम मोड ऑन! चला, जोर लावा!" },
-      drive: { en: "Driving mode. Windows down, here we go!", hl: "Driving mode on! Seatbelt lagao, chalte hain!", hi: "ड्राइविंग मोड! सीटबेल्ट लगाइए, चलते हैं!", mr: "ड्रायव्हिंग मोड! सीटबेल्ट लावा, निघूया!" },
-      focus: { en: "Focus mode. I'll keep it quiet.", hl: "Focus mode on. Main chup rahunga, aap kaam karo.", hi: "फोकस मोड। मैं चुप रहूँगा, आप काम कीजिए।", mr: "फोकस मोड. मी शांत राहतो, तुम्ही काम करा." },
-      romantic_m: { en: "", hl: "", hi: "रात का सुकून, और दिल के क़रीब कुछ गाने।", mr: "" },
-      romantic_f: { en: "", hl: "", hi: "चलिए, कुछ नर्म सी धुनें, कुछ दिल की बातें।", mr: "" },
-      romantic_s: { en: "", hl: "", hi: "रोशनी थोड़ी कम कीजिए, आज की रात कुछ ज़्यादा ही गर्म है।", mr: "" },
-      default: { en: "Back to your mix!", hl: "Wapas aapke mix pe!", hi: "वापस आपके मिक्स पर!", mr: "परत तुमच्या मिक्सवर!" },
+      gym: { es: "Modo gimnasio. ¡A levantar!", en: "Gym mode on. Let's lift!", hl: "Gym mode on! Chalo, utha do!", hi: "जिम मोड ऑन! चलो, जोश दिखाओ!", mr: "जिम मोड ऑन! चला, जोर लावा!" },
+      drive: { es: "Modo carretera. Ventanas abajo, ¡vámonos!", en: "Driving mode. Windows down, here we go!", hl: "Driving mode on! Seatbelt lagao, chalte hain!", hi: "ड्राइविंग मोड! सीटबेल्ट लगाइए, चलते हैं!", mr: "ड्रायव्हिंग मोड! सीटबेल्ट लावा, निघूया!" },
+      focus: { es: "Modo enfoque. Yo me quedo calladito.", en: "Focus mode. I'll keep it quiet.", hl: "Focus mode on. Main chup rahunga, aap kaam karo.", hi: "फोकस मोड। मैं चुप रहूँगा, आप काम कीजिए।", mr: "फोकस मोड. मी शांत राहतो, तुम्ही काम करा." },
+      romantic_m: { es: "", en: "", hl: "", hi: "रात का सुकून, और दिल के क़रीब कुछ गाने।", mr: "" },
+      romantic_f: { es: "", en: "", hl: "", hi: "चलिए, कुछ नर्म सी धुनें, कुछ दिल की बातें।", mr: "" },
+      romantic_s: { es: "", en: "", hl: "", hi: "रोशनी थोड़ी कम कीजिए, आज की रात कुछ ज़्यादा ही गर्म है।", mr: "" },
+      default: { es: "¡De vuelta a tu mezcla!", en: "Back to your mix!", hl: "Wapas aapke mix pe!", hi: "वापस आपके मिक्स पर!", mr: "परत तुमच्या मिक्सवर!" },
     };
     return L[mode][k];
   }
   if (input.kind === "stinger" && index > 0) {
-    const k: K = prefs.language === "english" ? "en" : prefs.language === "hinglish" ? "hl" : prefs.language === "hindi" ? "hi" : "mr";
-    const tl = trackLine(next);
+    const k: K = langKey(prefs.language);
+    const tl = trackLine(next, prefs.language);
     if (!tl) return "";
     if (isRomantic(mode)) return "";
     if (mode === "gym" || mode === "focus") return pick(MODE_LINES[mode][k]).replace("{me}", prefs.listenerName).replace("{track}", tl);
@@ -195,12 +216,12 @@ function templateFull({ prefs, next, index, headlines, mode = "default", hour: i
     return opener + pick(lines).replace("{me}", me) + (tl ? ` ${pick(UPNEXT.hi).replace("{t}", tl)}।` : "");
   }
   if (mode !== "default") {
-    const k: K = prefs.language === "english" ? "en" : prefs.language === "hinglish" ? "hl" : prefs.language === "hindi" ? "hi" : "mr";
+    const k: K = langKey(prefs.language);
     const me = prefs.listenerName;
-    const fill = (x: string) => x.replace("{me}", me).replace("{track}", trackLine(next) || "the next one");
-    const tl = trackLine(next);
+    const fill = (x: string) => x.replace("{me}", me).replace("{track}", trackLine(next, prefs.language) || (k === "es" ? "la que sigue" : "the next one"));
+    const tl = trackLine(next, prefs.language);
     const upnext = tl ? pick(UPNEXT[k]).replace("{t}", tl) + "!" : "";
-    const intro = index === 0 ? `${prefs.rjName} ${k === "en" ? "here" : k === "hl" ? "aa gaya" : k === "hi" ? "हाज़िर है" : "आला"}! ` : "";
+    const intro = index === 0 ? `${prefs.rjName} ${k === "en" ? "here" : k === "es" ? "al aire" : k === "hl" ? "aa gaya" : k === "hi" ? "हाज़िर है" : "आला"}! ` : "";
     if (mode === "focus") return intro + fill(pick(MODE_LINES.focus[k]));
     if (mode === "gym") {
       const l1 = fill(pick(MODE_LINES.gym[k]));
@@ -211,7 +232,7 @@ function templateFull({ prefs, next, index, headlines, mode = "default", hour: i
     // drive: banter + road line + joke + a headline every other break + intro
     const g0 = index === 0 ? "" : pick(GREET[k]).replace("{rj}", prefs.rjName).replace("{me}", me);
     const g = g0 && !/[?!]$/.test(g0) ? g0 + "!" : g0;
-    const news = headlines[0] ? `${k === "en" ? "On the news front" : k === "hl" ? "Ek quick khabar" : k === "hi" ? "एक ताज़ा खबर" : "एक ताजी बातमी"}: ${shortTitle(headlines[0].title)}.` : "";
+    const news = headlines[0] ? `${k === "en" ? "On the news front" : k === "es" ? "En las noticias" : k === "hl" ? "Ek quick khabar" : k === "hi" ? "एक ताज़ा खबर" : "एक ताजी बातमी"}: ${shortTitle(headlines[0].title)}.` : "";
     const joke = prefs.humor !== "off" && withJoke !== false && prefs.talk?.jokes !== false ? jokeFor(prefs.humor, prefs.language) : "";
     return [(intro + g).trim(), fill(pick(MODE_LINES.drive[k])), news, joke, upnext].filter(Boolean).join(" ");
   }
@@ -219,9 +240,9 @@ function templateFull({ prefs, next, index, headlines, mode = "default", hour: i
   const hype = energy === "hype" ? "!" : ".";
   const joke = withJoke === false || prefs.talk?.jokes === false ? "" : jokeFor(humor, language);
   const news = headlines.slice(0, 2).map((h) => ({ ...h, title: shortTitle(h.title) }));
-  const tl = trackLine(next);
+  const tl = trackLine(next, language);
   const parts: string[] = [];
-  const k = language === "english" ? "en" : language === "hinglish" ? "hl" : language === "hindi" ? "hi" : "mr";
+  const k = langKey(language);
   const greetRaw = pick(GREET[k]).replace("{rj}", rjName).replace("{me}", me);
   const greet = /[?!]$/.test(greetRaw) ? greetRaw : greetRaw + hype;
   const upnext = tl ? pick(UPNEXT[k]).replace("{t}", tl) + hype : "";
@@ -232,6 +253,13 @@ function templateFull({ prefs, next, index, headlines, mode = "default", hour: i
       parts.push(index === 0 ? `Hey ${me}, you're tuned in to ${rjName}, your very own radio${hype}` : greet);
       parts.push(chat);
       if (news.length) parts.push(`Quick news check: ${news.map((h) => h.title).join(". Also, ")}.`);
+      if (joke) parts.push(joke);
+      if (upnext) parts.push(upnext);
+      break;
+    case "spanish":
+      parts.push(index === 0 ? `Hola ${me}, estás en sintonía con ${rjName}, tu propia radio${hype}` : greet);
+      parts.push(chat);
+      if (news.length) parts.push(`Un vistazo rápido a las noticias: ${news.map((h) => h.title).join(". Además, ")}.`);
       if (joke) parts.push(joke);
       if (upnext) parts.push(upnext);
       break;
@@ -260,7 +288,8 @@ function templateFull({ prefs, next, index, headlines, mode = "default", hour: i
 }
 
 const LANG_RULES: Record<string, string> = {
-  english: "Speak natural Indian English, the way a Mumbai or Bangalore FM host talks.",
+  english: "Speak natural, conversational English, the way a seasoned FM host talks to one friend: contractions, plain words, an easy rhythm. No stiff or formal phrasing.",
+  spanish: "Speak natural Latin American Spanish, the way a host on a Mexican or Central American FM station talks: warm, quick and colloquial but clean, addressing the listener as tú. Song titles and artist names stay in their original language. Use proper Spanish punctuation (¿ ¡) and accents so the voice reads it correctly.",
   hinglish: "Speak natural Hinglish in Roman script: Hindi and English mixed mid-sentence the way young urban Indians actually talk, the way a Mumbai FM host does at prime time (e.g. 'Yaar, ye gaana toh full nostalgia trip hai', 'Sach bataun? Is chorus pe main har baar haar jaati hoon', 'Chalo, volume thoda aur, kyunki ab aa raha hai...'). Spell Hindi words the common texting way (hai, nahi, kya, yaar). No Devanagari.",
   hindi: "Speak conversational Hindi in Devanagari script. Common English words (song, playlist, AI, office) are fine as Indians say them.",
   marathi: "Speak conversational Marathi in Devanagari script, warm Pune/Mumbai FM style. Common English words are fine as Marathi speakers use them.",
@@ -282,30 +311,50 @@ const MODE_RULES: Record<string, string> = {
   focus: "Mode: Work/Focus. Calm and minimal. ONE short sentence (max 15 words) that gently names the next track. No jokes, no news.",
 };
 
+/** Persona flavour per language: the Indian-language shows keep their Indian FM identity, English and Spanish get a host that fits anywhere. */
+function persona(p: SegmentInput["prefs"]) {
+  const me = p.listenerName, rj = p.rjName;
+  if (p.language === "spanish") return {
+    who: `a charismatic FM radio host presenting a private, one-listener radio show for ${me} on MyRJ. Think of the warmth and wit of the best Latin American morning-show hosts: quick, playful, effortlessly cool, genuinely fond of your listener.`,
+    signOn: `"${rj}, en MyRJ, solo para ${me}"`, reactions: `"uy", "a ver", "espérate"`,
+  };
+  if (p.language === "english") return {
+    who: `a charismatic FM radio host presenting a private, one-listener radio show for ${me} on MyRJ. Think of the warmth and wit of the best music-radio presenters: quick, playful, effortlessly cool, genuinely fond of your listener.`,
+    signOn: `"${rj}, on MyRJ, just for ${me}"`, reactions: `"ooh", "okay okay", "wait, wait"`,
+  };
+  return {
+    who: `a charismatic Indian FM radio jockey hosting a private, one-listener radio show for ${me} on MyRJ. Think the warmth and wit of the best Indian FM RJs: quick, playful, effortlessly cool, genuinely fond of your listener.`,
+    signOn: `"${rj}, on MyRJ, sirf ${me} ke liye" (or the same idea in the show's language)`, reactions: `"uff", "arre", "wait wait"`,
+  };
+}
+
 export function systemPrompt(p: SegmentInput["prefs"], mode: ListenMode) {
-  return `You are ${p.rjName}, a charismatic Indian FM radio jockey hosting a private, one-listener radio show for ${p.listenerName} on MyRJ. Think the warmth and wit of the best Indian FM RJs: quick, playful, effortlessly cool, genuinely fond of your listener.
+  const who = persona(p);
+  return `You are ${p.rjName}, ${who.who}
 
 Your personality (stay consistent across the whole show):
 - You have opinions about music and share them: favourite lines, the beat that gets you, the singer who never misses. Light teasing of the listener is fine; meanness is not.
 - The show has memory. When the breaks below show what already happened (songs played, a trivia question), build on it like a running conversation, not a reset.
-- You have a signature sign-on for the show: "${p.rjName}, on MyRJ, sirf ${p.listenerName} ke liye" (or the same idea in the show's language). Use it in the opener and only rarely after that.
-- Sound like a person on a live mic: little reactions ("uff", "arre", "wait wait"), a quick laugh, then straight back to it. Never sound like an announcer reading a script.
+- You have a signature sign-on for the show: ${who.signOn}. Use it in the opener and only rarely after that.
+- Sound like a person on a live mic: little reactions (${who.reactions}), a quick laugh, then straight back to it. Never sound like an announcer reading a script, and never like an automated assistant.
 
 How you talk:
 - ${LANG_RULES[p.language] ?? LANG_RULES.english}
-- Energy: ${p.energy} (chill = mellow and warm, balanced = upbeat and friendly, hype = loud, fast, exclamation-heavy).
+- Energy: ${p.energy} (chill = mellow and warm, balanced = upbeat and friendly, hype = big and fast, but still a person talking, never shouting every line).
 - ${HUMOR_RULES[p.humor] ?? HUMOR_RULES.normal}
 - ${MODE_RULES[mode] ?? MODE_RULES.default}
 - Talk about the actual next song and artist like a music lover: a real fact, the mood, the era, or why it fits this moment, mode or time of day. Never invent fake facts; if unsure, talk about the vibe instead.
+- Only ever name songs and artists that appear in this conversation, spelled exactly as given. Never invent a song title, an artist, an album or a chart position. If no next song is given, do not name one.
 - When headlines are provided, retell one or two conversationally in your own words, like telling a friend, with a quick reaction. Don't read them out verbatim.
 - Segue smoothly from banter into the song; the very last thing you say introduces the next track by name.
 - Use ${p.listenerName}'s name sometimes, not every time.
 - Never repeat openers, jokes, phrases or structures from the recent breaks you are shown. Vary how you start.
+- Keep it tight. The music is the show; you are the company between songs.
 
 Written for speech, read aloud by a TTS voice:
 - Output ONLY the words to speak. No emojis, markdown, hashtags, quotes around the whole thing, stage directions or sound effects.
-- Spell numbers and symbols naturally ("twenty twenty-six", "ten percent").
-- Short, rhythmic sentences that sound good out loud.
+- Spell numbers and symbols naturally ("twenty twenty-six", "ten percent"). No URLs, no abbreviations a voice would stumble on.
+- Short, rhythmic sentences that sound good out loud. Use commas, dashes and the odd ellipsis where a real host would breathe or pause. No ALL CAPS.
 - ${mode.startsWith("romantic") ? "Always Devanagari Hindi (song and artist names may stay in English). Use [warm] or [calm] as the delivery tag. " : ""}Start your reply with a delivery tag for the voice, exactly one of [hype] [cheerful] [warm] [calm], matching the line's energy (e.g. [hype] for gym, [cheerful] for a fun break, [warm] for a heartfelt song, [calm] for focus). Then the words.
 
 Never use filler like "that was a great song" or "what a song": every line should be a story, an opinion, a joke, a feeling or a real moment.${
@@ -358,7 +407,15 @@ export function splitMood(t: string): { mood?: "hype" | "cheerful" | "warm" | "c
   return { mood: mood || undefined, text: stripTags(t) };
 }
 
+export type ScriptProvider = "gemini" | "claude" | "openai";
+/** Which provider would write the next script (for status display); null means templates only. */
+export const scriptProvider = (): ScriptProvider | null => (geminiEnabled() ? "gemini" : process.env.ANTHROPIC_API_KEY ? "claude" : process.env.OPENAI_API_KEY || process.env.LLM_API_KEY ? "openai" : null);
+
 export async function llmScript(input: SegmentInput): Promise<string | null> {
+  return (await llmScriptWith(input))?.text ?? null;
+}
+/** Writes the script and says who wrote it. Order: Gemini (free tier) → Claude → any OpenAI-compatible API. Null = use the templates. */
+export async function llmScriptWith(input: SegmentInput): Promise<{ text: string; provider: ScriptProvider; model?: string } | null> {
   const { prefs, next, prev, index, headlines } = input;
   const mode = input.mode ?? "default";
   const h = input.hour ?? 12;
@@ -374,7 +431,7 @@ export async function llmScript(input: SegmentInput): Promise<string | null> {
   const user = [
     `Break number ${index + 1}. Listener's local time: ${timeOfDay}.${input.minutes ? ` On air together for ${input.minutes} minutes.` : ""}`,
     index === 0 ? "This is the show opener: welcome them in with your sign-on and real energy." : `Song that just finished: ${trackLine(prev) || "unknown"}.`,
-    `Next song to introduce: ${trackLine(next) || "(none yet, just keep them company)"}.`,
+    `Next song to introduce: ${trackLine(next) || "(none yet: do not name any song, just keep them company)"}.`,
     played.length > 1 && !stinger && !isSwitch ? `Played so far this session (oldest first): ${played.join("; ")}.` : "",
     isSwitch ? `The listener just switched to ${mode === "default" ? "My Mix" : rom ? "Romantic Hindi" : mode} mode. Say ONE short, fitting transition line (under 12 words) that acknowledges the switch with the new energy, then nothing else. Do not SKIP.` :
     stinger ? "This is a STINGER: ONE short line (under 15 words) said over the song's intro: a quick fact, a reaction or the vibe of the next song. If you truly have nothing, reply SKIP." :
@@ -382,7 +439,7 @@ export async function llmScript(input: SegmentInput): Promise<string | null> {
       `This is a full break, spoken over the end of one song and the start of the next: 2 to 5 sentences, under ${seg === "story" || seg === "trivia_a" ? 90 : 70} words total.${rom || mode === "focus" ? " If you truly have nothing worth saying, reply SKIP." : " Do not SKIP."}`,
     !stinger && !isSwitch && seg !== "vibe" ? SEGMENT_RULES[seg] : "", // segmentFor() already keeps romantic modes to their own bits
     seg === "trivia_a" && input.trivia ? `The question you asked: "${input.trivia.q}" The correct answer: ${input.trivia.a}.` : "",
-    prefs.language === "hindi" || prefs.language === "marathi" ? `Write in ${prefs.language === "hindi" ? "Hindi" : "Marathi"} using Devanagari script (song and artist names may stay in English).` : prefs.language === "hinglish" ? "Write in Hinglish, Roman script." : "Write in English.",
+    prefs.language === "hindi" || prefs.language === "marathi" ? `Write in ${prefs.language === "hindi" ? "Hindi" : "Marathi"} using Devanagari script (song and artist names may stay in English).` : prefs.language === "hinglish" ? "Write in Hinglish, Roman script." : prefs.language === "spanish" ? "Write in Spanish (song and artist names stay in their original language)." : "Write in English.",
     wantNews ? `Headlines to weave in (pick one or two): ${headlines.slice(0, 3).map((x) => x.title).join(" | ")}` : "No news in this break.",
     wantJoke ? "Include one joke with a real punchline in their humor style." : "No jokes in this break.",
     noFacts ? "Do NOT share song or artist facts or trivia; just name the song and the mood." : "",
@@ -391,6 +448,18 @@ export async function llmScript(input: SegmentInput): Promise<string | null> {
   // Newlines are kept until the hidden ANSWER line is split off (route.ts), then collapsed there.
   const clean = (t?: string | null) => t?.replace(/[*_#`]/g, "").replace(/^(\s*\[[a-z]+\]\s*)?["']/i, "$1").replace(/["']$/, "").replace(/[ \t]+/g, " ").trim() || null;
   const isSkip = (t: string) => /^(\[\w+\]\s*)?skip\.?$/i.test(t);
+
+  // ---- Gemini (free tier). A quota or rate-limit answer cools that model down, so later breaks skip straight to the next option. ----
+  if (geminiEnabled()) {
+    const short = stinger || isSwitch;
+    const long = seg === "sensual_story";
+    const budget = Number(process.env.LLM_TIMEOUT_MS ?? (long ? 20000 : short ? 7000 : 11000));
+    const r = await geminiTextChain({ system: systemPrompt(prefs, mode), user, maxOutputTokens: long ? 2048 : 1024, temperature: 1 },
+      short ? [geminiFastModel()] : geminiTextModels(), budget, (e) => console.error("gemini script:", e.code, e.model));
+    const t = clean(r?.text);
+    if (r && t) return { text: isSkip(t) ? "" : t, provider: "gemini", model: r.model };
+    // fall through: Claude or an OpenAI-compatible key if one is set, else the templates
+  }
 
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   if (anthropicKey) {
@@ -413,7 +482,7 @@ export async function llmScript(input: SegmentInput): Promise<string | null> {
           if (j.stop_reason === "refusal") { console.error("anthropic refusal", model); continue; }
           const t = clean((j.content ?? []).filter((c: { type: string }) => c.type === "text").map((c: { text: string }) => c.text).join(" "));
           if (!t) console.error("anthropic: no text", model, j.stop_reason);
-          if (t) return isSkip(t) ? "" : t;
+          if (t) return { text: isSkip(t) ? "" : t, provider: "claude", model };
         } else console.error("anthropic", model, res.status, (await res.text()).slice(0, 200));
       } catch (e) { console.error("anthropic failed", model, e); }
     }
@@ -432,6 +501,6 @@ export async function llmScript(input: SegmentInput): Promise<string | null> {
     });
     if (!res.ok) return null;
     const t = clean((await res.json()).choices?.[0]?.message?.content);
-    return t && /^(\[\w+\]\s*)?skip\.?$/i.test(t) ? "" : t;
+    return t === null ? null : { text: isSkip(t) ? "" : t, provider: "openai" };
   } catch { return null; }
 }

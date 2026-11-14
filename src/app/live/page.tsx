@@ -3,12 +3,14 @@
 import Link from "next/link";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { effectiveSongLangs, isOnboarded, isRomantic, loadPrefs, modeInfo, MODES, ROMANTIC_MODES, romanticVoice, savePrefs, type ListenMode, type Prefs, type TrackInfo } from "@/lib/prefs";
+import { AUTO_VOICE, BROWSER_VOICE, effectiveSongLangs, isOnboarded, isRomantic, loadPrefs, modeInfo, MODES, ROMANTIC_MODES, romanticVoice, savePrefs, SPEECH_LANG, type ListenMode, type Prefs, type TrackInfo } from "@/lib/prefs";
 import { clearSpotifyBackoff, Curator, getMe, limitedEndpoint, quotaExceeded, getToken, getTokenInfo, sp, spotifyBackoffMs, SpotifyError } from "@/lib/spotifyClient";
 import { AllPrefs, MusicSourcePicker, SongLangPicker, TalkToggles, usePrefs } from "@/components/prefs";
 import { YtCurator, YtPlayer, ytConnected, type YtState } from "@/lib/ytClient";
 import { stripTags } from "@/lib/text";
-import { cx, Spinner } from "@/components/ui";
+import { cx } from "@/components/ui";
+import { loadVoices, speakText, type SpeechMood } from "@/lib/browserVoice";
+import { Visualizer } from "@/components/Visualizer";
 import { Lyrics } from "@/components/Lyrics";
 import { Mascot } from "@/components/Mascot";
 
@@ -24,7 +26,7 @@ type SegType = "vibe" | "story" | "trivia_q" | "trivia_a" | "hot_take" | "callba
 interface Plan { kind: BreakKind; withNews?: boolean; withJoke?: boolean; segment?: SegType }
 // Show bits for full breaks, rotated so the same one never runs twice in a row (trivia answers are scheduled, not drawn).
 const SEG_BAG: SegType[] = ["story", "vibe", "hot_take", "trivia_q", "callback", "dedication", "story", "vibe"];
-interface Segment { script: string; audioUrl: string | null; lang: string; kind: BreakKind; dur?: number; story?: boolean } // dur: voice clip length in seconds; story: a 30-60s sensual story (gets the gap to itself)
+interface Segment { script: string; audioUrl: string | null; lang: string; kind: BreakKind; dur?: number; story?: boolean; mood?: SpeechMood } // dur: voice clip length in seconds; story: a 30-60s sensual story (gets the gap to itself)
 
 const NEEDED = ["streaming", "user-modify-playback-state", "user-read-playback-state"];
 const SONG_VOL = 0.85;
@@ -85,6 +87,7 @@ function LiveInner() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const voiceElRef = useRef<HTMLAudioElement | null>(null); // ONE element, unlocked on a tap, reused for every clip (iOS autoplay)
   const clipIdRef = useRef(0);
+  const clipLiveRef = useRef(false); // a voice clip is mid-play (so returning to the tab may resume it, but never replays a finished one)
   const blockedRef = useRef<(() => void) | null>(null); // a clip the browser blocked; retried on the next tap
   const modeRef = useRef<ListenMode>("default");
   const outRef = useRef<Out>("none");
@@ -102,7 +105,7 @@ function LiveInner() {
     ? new YtCurator(m, effectiveSongLangs(m, loadPrefs().songLangs), (loadPrefs().externalPlaylists ?? []).map((x) => x.url), loadPrefs().tasteSeeds ?? [])
     : new Curator(m, loadPrefs().tasteSeeds ?? [], effectiveSongLangs(m, loadPrefs().songLangs));
   const recentRef = useRef<string[]>([]);
-  const ttsQuotaRef = useRef(false);
+  const ttsQuotaRef = useRef(0); // until when the neural voice is resting (free allowance used up): the device voice covers meanwhile
   const lastNewsRef = useRef(0);
   const sinceTalkRef = useRef(0);
   const sinceJokeRef = useRef(0);
@@ -199,7 +202,20 @@ function LiveInner() {
     };
     window.addEventListener("spotify-backoff", onBackoff);
     const onOnline = () => { setNotice(null); log("back online"); };
-    const onVis = () => { if (document.visibilityState === "visible" && phaseRef.current !== "idle") { requestWake(); if (ctxRef.current && ctxRef.current.state !== "running") ctxRef.current.resume().catch(() => {}); } };
+    const onVis = () => {
+      if (document.visibilityState !== "visible" || phaseRef.current === "idle") return;
+      requestWake(); // the wake lock is dropped whenever Safari goes to the background
+      if (ctxRef.current && ctxRef.current.state !== "running" && !pausedRef.current) ctxRef.current.resume().catch(() => {});
+      // iOS pauses the device voice and our voice clip when the tab is hidden: pick both up again unless the listener paused the show.
+      if (!pausedRef.current) {
+        try { if (window.speechSynthesis?.paused) window.speechSynthesis.resume(); } catch { /* ignore */ }
+        const a = voiceElRef.current;
+        if (a && clipLiveRef.current && a.paused && !a.ended && a.currentTime > 0 && !voicePausedRef.current) a.play().catch(() => {});
+      }
+    };
+    const onShow = (e: PageTransitionEvent) => { if (e.persisted && phaseRef.current !== "idle") stop("Welcome back. Tap Go Live to tune in again."); }; // restored from the back/forward cache: the old session's timers are gone
+    window.addEventListener("pageshow", onShow);
+    loadVoices().catch(() => {}); // warm the device-voice list early: it loads asynchronously
     const onTap = () => unlockAudio(); // every tap re-unlocks (covers autostart after onboarding, and blocked clips)
     window.addEventListener("pointerdown", onTap); window.addEventListener("touchend", onTap);
     window.addEventListener("offline", onOffline); window.addEventListener("online", onOnline);
@@ -208,7 +224,7 @@ function LiveInner() {
       sessionRef.current++; playerRef.current?.disconnect(); audioRef.current?.pause(); chan?.close();
       window.removeEventListener("spotify-backoff", onBackoff); if (boTimer) clearInterval(boTimer);
       window.removeEventListener("offline", onOffline); window.removeEventListener("online", onOnline);
-      document.removeEventListener("visibilitychange", onVis);
+      document.removeEventListener("visibilitychange", onVis); window.removeEventListener("pageshow", onShow);
       window.removeEventListener("pointerdown", onTap); window.removeEventListener("touchend", onTap);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -501,12 +517,13 @@ function LiveInner() {
       let a = voiceElRef.current;
       if (!a) { a = new Audio(); (a as any).playsInline = true; a.setAttribute("playsinline", ""); voiceElRef.current = a; }
       a.onended = a.onerror = a.ontimeupdate = null;
-      a.pause(); a.src = url; audioRef.current = a; a.volume = opts.fadeIn ? 0 : 1;
+      a.pause(); a.src = url; audioRef.current = a; a.volume = opts.fadeIn ? 0 : 1; clipLiveRef.current = true;
       if (opts.voice) attachAnalyser();
       if (opts.voice) voiceClockRef.current = () => [a.currentTime, Number.isFinite(a.duration) ? a.duration : 0];
       let done = false;
       const finish = async (fade = false) => {
         if (done) return; done = true; blockedRef.current = null;
+        if (clipIdRef.current === id) clipLiveRef.current = false;
         if (clipIdRef.current === id) { if (fade) await fadeEl(a!, 0, 900); if (clipIdRef.current === id) a!.pause(); }
         resolve();
       };
@@ -581,31 +598,14 @@ function LiveInner() {
     } catch { /* no web audio */ }
   }
 
-  /** Free fallback voice (Web Speech API) so the RJ still talks when ElevenLabs fails. */
-  function speakBrowser(text: string, lang: string) {
-    return new Promise<void>((resolve) => {
-      const synth = window.speechSynthesis;
-      if (!synth) { log("no browser voice available"); setTimeout(resolve, 3000); return; }
-      if (synth.paused) synth.resume();
-      synth.cancel();
-      const t0 = Date.now(), est = Math.max(2, [...text].length / 13);
-      voiceClockRef.current = () => [(Date.now() - t0) / 1000, est];
-      const vs = synth.getVoices();
-      const v = vs.find((x) => x.lang === lang) ?? vs.find((x) => x.lang.startsWith(lang.slice(0, 2)));
-      // Chrome cuts long utterances (~15s), so speak sentence by sentence.
-      const parts = text.match(/[^.!?।]+[.!?।]*/g)?.map((x) => x.trim()).filter(Boolean) ?? [text];
-      let done = false;
-      const finish = () => { if (!done) { done = true; synth.cancel(); resolve(); } };
-      skipRef.current = finish;
-      setTimeout(finish, 90000);
-      parts.forEach((t, i) => {
-        const u = new SpeechSynthesisUtterance(t);
-        u.lang = lang; if (v) u.voice = v; u.rate = 1.05;
-        u.onerror = (ev) => { log(`browser voice error: ${ev.error}`); setDiag({ voice: `browser voice: ${ev.error}` }); if (i === parts.length - 1) finish(); };
-        if (i === parts.length - 1) u.onend = finish;
-        synth.speak(u);
-      });
-    });
+  /** The device's own voice (Web Speech API): free and always there, so the RJ still talks when no neural voice can. */
+  async function speakBrowser(text: string, lang: string, mood?: SpeechMood) {
+    const t0 = Date.now();
+    const sp = await speakText(text, lang, mood ?? "cheerful", (m) => { log(m); setDiag({ voice: m }); });
+    voiceClockRef.current = () => [(Date.now() - t0) / 1000, sp.estSeconds];
+    if (sp.voice) log(`device voice: ${sp.voice}`);
+    skipRef.current = sp.cancel;
+    await sp.done;
   }
 
   /** Voice clip length, for timing talk-overs. Some MP3s report no duration until played: estimate from the text then. */
@@ -634,16 +634,19 @@ function LiveInner() {
           minutes: onAirAtRef.current ? Math.round((Date.now() - onAirAtRef.current) / 60000) : 0,
         }),
       }).then(async (r) => { if (!r.ok) throw new Error(`segment ${r.status} ${(await r.text().catch(() => "")).slice(0, 120)}`); return r.json(); }), 25000, "segment");
-      setDiag({ script: `${seg.mode ?? "?"} ok` });
+      setDiag({ script: `${seg.mode === "llm" ? (seg.provider ?? "ai") : (seg.mode ?? "?")} ok` });
       if (seg.trivia?.a && !isRomantic(modeRef.current)) triviaRef.current = { q: String(seg.trivia.q), a: String(seg.trivia.a) };
-      breaksRef.current = [...breaksRef.current, `${plan.kind}${seg.segment && seg.segment !== "vibe" ? `/${seg.segment}` : ""}:${!seg.script ? "skip" : seg.mode === "llm" ? "claude" : "template"}`].slice(-6);
+      breaksRef.current = [...breaksRef.current, `${plan.kind}${seg.segment && seg.segment !== "vibe" ? `/${seg.segment}` : ""}:${!seg.script ? "skip" : seg.mode === "llm" ? (seg.provider ?? "ai") : "template"}`].slice(-6);
       setDiag({ breaks: breaksRef.current.join(" · ") });
       seg.script = stripTags(String(seg.script ?? ""));
       if (!seg.script) { log(`RJ chose silence (${plan.kind})`); return null; }
       recentRef.current.push(seg.script);
       if (plan.withNews && seg.headlines?.length) lastNewsRef.current = Date.now();
-      const lang = { english: "en-IN", hinglish: "hi-IN", hindi: "hi-IN", marathi: "mr-IN" }[p.language];
-      if (ttsQuotaRef.current) { log("ElevenLabs credits used up: browser voice"); return { script: seg.script, audioUrl: null, lang, kind: plan.kind, story: plan.segment === "sensual_story" }; }
+      const lang = SPEECH_LANG[p.language] ?? "en-US";
+      const mood: SpeechMood | undefined = ["hype", "cheerful", "warm", "calm"].includes(seg.mood) ? seg.mood : undefined;
+      const device = (): Segment => ({ script: seg.script, audioUrl: null, lang, kind: plan.kind, story: plan.segment === "sensual_story", mood });
+      if (p.voiceId === BROWSER_VOICE && !isRomantic(modeRef.current)) return device(); // the listener chose the device voice
+      if (Date.now() < ttsQuotaRef.current) { log("neural voice resting (free allowance): device voice"); return device(); }
       try {
         const tts = () => withTimeout(fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: seg.script, voiceId: p.voiceId, energy: p.energy, mode: modeRef.current, language: p.language, mood: seg.mood }) }), 20000, "voice");
         // One retry on a transient failure (network blip, 5xx) before dropping to the robotic browser voice.
@@ -651,7 +654,8 @@ function LiveInner() {
         if (!r.ok && r.status >= 500) { const j = await r.clone().json().catch(() => ({})); if (j.code !== "quota_exceeded") { log(`voice ${r.status}, retrying`); await sleep(800); r = await tts(); } }
         if (!r.ok) {
           const j = await r.json().catch(() => ({}));
-          if (j.code === "quota_exceeded") { ttsQuotaRef.current = true; setNotice("Voice service unavailable (ElevenLabs credits used up, Azure not set up). Using the browser voice for now."); setTimeout(() => setNotice(null), 6000); }
+          if (j.code === "quota_exceeded") { ttsQuotaRef.current = Date.now() + 10 * 60_000; setNotice("The free studio voice has hit its limit for now. Your device's voice is filling in."); setTimeout(() => setNotice(null), 6000); }
+          if (j.code === "not_configured") ttsQuotaRef.current = Date.now() + 60 * 60_000; // no voice service on this server: don't ask again every break
           throw new Error(`${j.error ?? `tts ${r.status}`}${j.code ? ` (${j.code})` : ""}`);
         }
         const prov = r.headers.get("X-TTS-Provider"), fb = r.headers.get("X-TTS-Fallback");
@@ -660,8 +664,8 @@ function LiveInner() {
         if (!blob.size || !/audio/.test(blob.type)) throw new Error(`voice returned ${blob.type || "nothing"} (${blob.size}B)`);
         setDiag({ voice: `${prov ?? "ok"} ${Math.round(blob.size / 1024)}KB${fb ? ` (fallback after ${fb})` : ""}` });
         const url = URL.createObjectURL(blob);
-        return { script: seg.script, audioUrl: url, lang, kind: plan.kind, story: plan.segment === "sensual_story", dur: await clipSeconds(url, seg.script) };
-      } catch (e) { log(`RJ voice failed, using browser voice: ${e}`); setDiag({ voice: `failed: ${String(e).slice(0, 160)}` }); return { script: seg.script, audioUrl: null, lang, kind: plan.kind, story: plan.segment === "sensual_story" }; }
+        return { ...device(), audioUrl: url, dur: await clipSeconds(url, seg.script) };
+      } catch (e) { log(`RJ voice failed, using the device voice: ${e}`); setDiag({ voice: `failed: ${String(e).slice(0, 160)}` }); return device(); }
     } catch (e) { log(`RJ script failed: ${e}`); setDiag({ script: `failed: ${String(e).slice(0, 160)}` }); return null; }
   }
 
@@ -1018,13 +1022,13 @@ function LiveInner() {
     unlockAudio();
     const p = effPrefs();
     if (!p.voiceId) { // skipped the voice step: use the default voice for their language instead of bouncing them back
-      const v = p.language === "hindi" ? "azure:hi-IN-SwaraNeural" : p.language === "marathi" ? "azure:mr-IN-AarohiNeural" : "azure:en-IN-NeerjaNeural";
+      const v = AUTO_VOICE; // the server picks the best voice it has for their language
       savePrefs({ ...loadPrefs(), voiceId: v }); up("voiceId", v); p.voiceId = v;
     }
     const sid = ++sessionRef.current;
     chanRef.current?.postMessage({ type: "live", tab: tabId.current });
     requestWake();
-    recentRef.current = []; setNotice(null); setScript(""); setNow(null); setUpNext(null);
+    recentRef.current = []; ttsQuotaRef.current = 0; setNotice(null); setScript(""); setNow(null); setUpNext(null);
     setPhase("tuning"); setStatus("");
     // ---- start-up: Spotify output, first songs and the RJ intro all run in parallel; music never waits on the intro ----
     const t0 = performance.now(), times: string[] = [];
@@ -1084,7 +1088,7 @@ function LiveInner() {
       await jingle();
       const bed = seg.kind === "full" && seg.script.length > 140;
       if (bed) startBed();
-      const clip = (seg.audioUrl ? playClip(seg.audioUrl, { maxMs: 90000, voice: true }) : speakBrowser(seg.script, seg.lang)).finally(() => bedRef.current?.stop());
+      const clip = (seg.audioUrl ? playClip(seg.audioUrl, { maxMs: 90000, voice: true }) : speakBrowser(seg.script, seg.lang, seg.mood)).finally(() => bedRef.current?.stop());
       // Phone Spotify takes ~0.5-1s to start a song: fire it just before the RJ's last word so there's no dead air.
       const lead = outRef.current === "connect" && seg.audioUrl && next ? 700 : 0;
       await (lead ? Promise.race([clip, voiceNearEnd(lead, sid)]) : clip);
@@ -1186,17 +1190,18 @@ function LiveInner() {
   const art = (phase === "song" || phase === "waiting") ? now?.image : null;
 
   return (
-    <main className="ambient relative min-h-dvh w-full overflow-x-hidden" onClick={() => notice?.startsWith("Tap anywhere") && setNotice(null)}>
+    <main data-mode={listenMode} className="ambient relative min-h-dvh w-full overflow-x-clip" onClick={() => notice?.startsWith("Tap anywhere") && setNotice(null)}>
+      <div aria-hidden className={cx("aurora", live && "is-live", (paused || !live) && "is-paused")}><i /><i /></div>
       {art && <img src={art} alt="" className="pointer-events-none fixed inset-0 -z-10 h-full w-full scale-150 object-cover opacity-30 blur-[80px] transition-opacity duration-1000" />}
       <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))] sm:px-6">
         {/* top bar */}
-        <header className="flex h-10 items-center justify-between">
-          <Link href="/settings" className="flex items-center gap-2 text-[15px] font-semibold tracking-tight">
+        <header className="flex h-11 items-center justify-between">
+          <Link href="/settings" onClick={(e) => { if (live) { e.preventDefault(); setDrawer(true); } }} aria-label={live ? "MyRJ, open settings" : "MyRJ settings"} className="flex h-11 items-center gap-2 text-[15px] font-semibold tracking-tight">
             <span className={cx("onair-dot h-2 w-2 rounded-full", live && "is-live")} />MyRJ
           </Link>
           <div className="flex items-center gap-3">
-            {live && <span className="flex items-center gap-1.5 rounded-full bg-red-500/15 px-2.5 py-1 text-[11px] font-semibold tracking-wider text-red-300"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" />LIVE</span>}
-            <button onClick={() => setDrawer(true)} className="glass flex h-9 w-9 items-center justify-center rounded-full text-zinc-300 hover:text-white" aria-label="Edit RJ">
+            {live && <span className="live-badge flex items-center gap-1.5 rounded-full bg-red-500/15 px-2.5 py-1 text-[11px] font-semibold tracking-wider text-red-300"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" />LIVE</span>}
+            <button onClick={() => setDrawer(true)} className="glass flex h-11 w-11 items-center justify-center rounded-full text-zinc-300 hover:text-white" aria-label="Edit RJ">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 6h16M4 12h10M4 18h6" strokeLinecap="round" /></svg>
             </button>
           </div>
@@ -1218,8 +1223,8 @@ function LiveInner() {
               <div ref={ytHostRef} className="h-full w-full" />
               {ytShow && ytStalled && <button data-testid="tap-to-play" onClick={tapToPlay} className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-black/70 text-white"><span className="flex h-16 w-16 items-center justify-center rounded-full bg-[#f3efe8] text-[#141210]"><svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z" /></svg></span><span className="text-sm font-medium">Tap to play</span></button>}
             </div>
-            <div data-testid="art-toggle" onClick={() => { if (live) togglePause(); }} className={cx("aspect-square transition-transform", live && "cursor-pointer", ytShow && "hidden", phase === "idle" ? "w-[min(34vw,150px,12svh)] [@media(max-height:700px)]:w-[min(34vw,150px,10svh)]" : "w-[min(64vw,280px,26svh)]", art && "overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]", " duration-700", speaking || phase === "rj" ? "scale-[0.72]" : phase === "song" ? "scale-100" : "scale-[0.94]")}>
-              {art ? <img key={art} src={art} alt="" className="fade-up h-full w-full object-cover" /> : (
+            <div data-testid="art-toggle" onClick={() => { if (live) togglePause(); }} className={cx("art-wrap aspect-square transition-transform", phase === "song" && !paused && "is-playing", live && "cursor-pointer", ytShow && "hidden", phase === "idle" ? "w-[min(34vw,150px,12svh)] [@media(max-height:700px)]:w-[min(34vw,150px,10svh)]" : "w-[min(64vw,280px,26svh)]", art && "overflow-hidden rounded-[28px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]", " duration-700", speaking || phase === "rj" ? "scale-[0.72]" : phase === "song" ? "scale-100" : "scale-[0.94]")}>
+              {art ? <img key={art} src={art} alt="" className="art-img art-swap h-full w-full object-cover" /> : (
                 <div className="relative flex h-full w-full items-center justify-center">
                   <Mascot state={phase === "rj" || speaking ? "talking" : phase === "tuning" || phase === "recovering" ? "tuning" : live ? "live" : "idle"} className="w-[78%]" getLevel={voiceLevel} />
                   
@@ -1227,7 +1232,7 @@ function LiveInner() {
               )}
             </div>
             {(phase === "rj" || speaking) && (
-              <div className="glass absolute -bottom-4 left-1/2 flex -translate-x-1/2 items-end gap-[3px] rounded-full px-3.5 py-2">
+              <div className="glass onair-pill absolute -bottom-4 left-1/2 flex -translate-x-1/2 items-end gap-[3px] rounded-full px-3.5 py-2" data-testid="dj-speaking">
                 {[0, 1, 2, 3, 4].map((b) => <span key={b} className="w-[3px] origin-bottom animate-[eq_0.9s_ease-in-out_infinite] rounded-full bg-[#f3efe8]" style={{ animationDelay: `${b * 0.12}s`, height: 12 }} />)}
                 <span className="ml-2 whitespace-nowrap text-[11px] font-medium">{rjName}</span>
               </div>
@@ -1238,7 +1243,7 @@ function LiveInner() {
             {(phase === "rj" || speaking) && script ? (
               <Lyrics key={script} text={script} clock={clock} />
             ) : phase === "song" || (phase === "waiting" && now) ? (
-              <div key={now?.uri} className="fade-up">
+              <div key={now?.uri ?? now?.ytId ?? now?.name} className="track-in">
                 <h1 className="truncate text-[22px] font-semibold tracking-tight sm:text-[26px]">{now?.name}</h1>
                 <p className="mt-1 truncate text-[15px] text-zinc-400">{now?.artists}</p>
               </div>
@@ -1251,8 +1256,9 @@ function LiveInner() {
             )}
           </div>
 
-          {live && <><div className={cx("mt-4 h-1 w-full overflow-hidden rounded-full bg-white/10 transition-opacity", phase !== "song" && "opacity-0")}>
-            <div className={cx("h-full rounded-full bg-white transition-[width] duration-700 ease-linear", phase !== "song" && "opacity-0")} style={{ width: `${progress * 100}%` }} />
+          {live && <><Visualizer active={phase === "song" || phase === "rj" || speaking} paused={paused || ytStalled} getLevel={voiceLevel} className="mt-3 w-full [@media(max-height:700px)]:hidden" />
+          <div className={cx("mt-3 h-1 w-full overflow-hidden rounded-full bg-white/10 transition-opacity", phase !== "song" && "opacity-0")}>
+            <div className={cx("progress-fill h-full rounded-full transition-[width] duration-700 ease-linear", phase !== "song" && "opacity-0")} style={{ width: `${progress * 100}%` }} />
           </div>
           <p className="mt-3 h-4 text-xs text-zinc-500" aria-live="polite">{paused && live ? "Paused" : status}</p></>}
           {now && (outRef.current === "preview" || phase === "waiting") && now.spotifyUrl && <a href={now.spotifyUrl} target="_blank" rel="noreferrer" className="mt-2 text-xs text-[#1DB954]">Open in Spotify ↗</a>}
@@ -1279,22 +1285,30 @@ function LiveInner() {
           </div>
         )}
 
-        <div className="flex items-center gap-3">
+        <div className="sticky bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-20 flex items-center gap-3">
           {!live ? (
             <button aria-label="Go Live" onClick={goLive} className="h-14 w-full rounded-full bg-[#f3efe8] text-[17px] sm:h-16 font-semibold text-black shadow-[0_12px_44px_-14px_rgba(243,239,232,0.18)] transition active:scale-[0.97]">Go Live</button>
           ) : (
-            <div className="flex w-full items-center justify-center gap-6">
-              <button onClick={() => stop("Off air. Tap Go Live to tune back in.")} className="flex h-14 w-14 items-center justify-center rounded-full text-zinc-400 transition hover:text-white active:scale-90" aria-label="Stop, go off air">
+            /* Player dock: everything a thumb needs, on frosted glass, pinned above the home indicator. */
+            <div className="liquid-glass dock flex w-full items-center justify-between" data-testid="dock">
+              <button onClick={() => { setPickerMode(listenMode); setPickerLangs(prefs.songLangs.join()); setPicker(true); }} className="dock-btn" aria-label="Station and songs">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{DOCK_ICONS[listenMode]}</svg>
+                <span aria-hidden>Station</span>
+              </button>
+              <button onClick={() => stop("Off air. Tap Go Live to tune back in.")} className="flex h-[52px] w-[52px] items-center justify-center rounded-full text-zinc-300 transition hover:text-white active:scale-90" aria-label="Stop, go off air">
                 <span className="h-3.5 w-3.5 rounded-[3px] bg-current" />
               </button>
               <button onClick={() => { if (ytStalled) tapToPlay(); else togglePause(); }} disabled={phase === "tuning"} aria-label={paused || ytStalled ? "Play" : "Pause"} aria-pressed={paused || ytStalled} data-testid="playpause"
-                className="flex h-20 w-20 select-none items-center justify-center rounded-full bg-[#f3efe8] text-[#141210] shadow-[0_12px_44px_-14px_rgba(243,239,232,0.18)] transition active:scale-[0.93] disabled:opacity-40">
-                {paused || ytStalled
-                  ? <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z" /></svg>
-                  : <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden><rect x="6" y="5" width="4" height="14" rx="1.3" /><rect x="14" y="5" width="4" height="14" rx="1.3" /></svg>}
+                className={cx("play-btn flex h-[72px] w-[72px] select-none items-center justify-center rounded-full bg-[#f3efe8] text-[#141210] shadow-[0_12px_44px_-14px_rgba(243,239,232,0.3)] transition active:scale-[0.93] disabled:opacity-40", !(paused || ytStalled) && phase !== "tuning" && "is-playing")}>
+                <svg className="ico" data-on={paused || ytStalled} width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z" /></svg>
+                <svg className="ico" data-on={!(paused || ytStalled)} width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden><rect x="6" y="5" width="4" height="14" rx="1.3" /><rect x="14" y="5" width="4" height="14" rx="1.3" /></svg>
               </button>
-              <button onClick={next} disabled={phase === "tuning" || phase === "recovering"} className="flex h-14 w-14 items-center justify-center rounded-full text-zinc-400 transition hover:text-white active:scale-90 disabled:opacity-40" aria-label="Next">
+              <button onClick={next} disabled={phase === "tuning" || phase === "recovering"} className="flex h-[52px] w-[52px] items-center justify-center rounded-full text-zinc-300 transition hover:text-white active:scale-90 disabled:opacity-40" aria-label="Next">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M5 6.2v11.6a1 1 0 0 0 1.55.83L15 13v4.5a1 1 0 0 0 2 0v-11a1 1 0 0 0-2 0V11L6.55 5.37A1 1 0 0 0 5 6.2Z" /></svg>
+              </button>
+              <button onClick={() => setDrawer(true)} className="dock-btn" aria-label="Host and voice settings">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7" /></svg>
+                <span aria-hidden>Host</span>
               </button>
             </div>
           )}
@@ -1326,7 +1340,7 @@ function LiveInner() {
       {picker && (
         <div className="fixed inset-0 z-50">
           <div className="fade-up absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={closePicker} />
-          <div className="sheet-up absolute inset-x-0 bottom-0 mx-auto max-w-md rounded-t-[28px] border-t border-white/10 bg-[#0d0c0b]/95 px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur-xl">
+          <div role="dialog" aria-modal="true" aria-label="Station and songs" className="sheet-up glass-sheet absolute inset-x-0 bottom-0 mx-auto max-h-[92dvh] max-w-md overflow-y-auto overscroll-contain rounded-t-[28px] px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3">
             <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-white/15" />
             <SessionPicker mode={pickerMode} onMode={setPickerMode} p={prefs} up={up} />
             <button onClick={closePicker} className="mt-5 h-12 w-full rounded-full bg-[#f3efe8] text-[15px] font-semibold text-[#141210] active:scale-[0.98]">Done</button>
@@ -1338,12 +1352,12 @@ function LiveInner() {
       {drawer && (
         <div className="fixed inset-0 z-50">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm fade-up" onClick={() => setDrawer(false)} />
-          <div className="sheet-up absolute inset-x-0 bottom-0 mx-auto flex max-h-[88dvh] max-w-xl flex-col pb-[env(safe-area-inset-bottom)] rounded-t-[28px] border-t border-white/10 bg-[#0d0d10]/95 backdrop-blur-xl">
+          <div role="dialog" aria-modal="true" aria-label="Your RJ" className="sheet-up glass-sheet absolute inset-x-0 bottom-0 mx-auto flex max-h-[88dvh] max-w-xl flex-col pb-[env(safe-area-inset-bottom)] rounded-t-[28px]">
             <div className="flex items-center justify-between px-6 pb-2 pt-4">
               <div><div className="mx-auto mb-3 h-1 w-10 rounded-full bg-white/15" /><h2 className="text-lg font-semibold">Your RJ</h2><p className="text-xs text-zinc-500">Changes apply from the next break.</p></div>
               <button onClick={() => setDrawer(false)} className="glass h-9 rounded-full px-4 text-sm">Done</button>
             </div>
-            <div className="overflow-y-auto px-6 pb-10 pt-4"><AllPrefs p={prefs} up={up} compact returnTo="/live" /></div>
+            <div className="overflow-y-auto overscroll-contain px-6 pb-10 pt-4"><AllPrefs p={prefs} up={up} compact returnTo="/live" /></div>
           </div>
         </div>
       )}
@@ -1409,7 +1423,7 @@ function SessionPicker({ mode, onMode, p, up }: { mode: ListenMode; onMode: (m: 
         <div className="grid grid-cols-4 gap-1.5" role="radiogroup" aria-label="Mode">
           {MODES.map((m) => (
             <button key={m.id} role="radio" aria-checked={mode === m.id} onClick={() => onMode(m.id)}
-              className={cx("flex h-[54px] [@media(max-height:700px)]:h-12 flex-col items-center justify-center gap-0.5 rounded-2xl border text-[12px] font-medium transition active:scale-95", mode === m.id ? "border-[#f3efe8] bg-[#f3efe8] text-[#141210]" : "border-white/10 text-zinc-300 hover:border-white/25")}>
+              className={cx("flex h-[54px] [@media(max-height:700px)]:h-12 flex-col items-center justify-center gap-0.5 rounded-2xl border text-[12px] font-medium transition active:scale-95", mode === m.id ? "chip-pop border-[#f3efe8] bg-[#f3efe8] text-[#141210]" : "border-white/10 text-zinc-300 hover:border-white/25")}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{DOCK_ICONS[m.id]}</svg>
               {m.label}
             </button>
@@ -1421,7 +1435,7 @@ function SessionPicker({ mode, onMode, p, up }: { mode: ListenMode; onMode: (m: 
         <div className="grid grid-cols-3 gap-1.5" role="radiogroup" aria-label="Romantic Hindi voice">
           {ROMANTIC_MODES.map((m) => (
             <button key={m.id} role="radio" aria-checked={mode === m.id} aria-label={`${m.label} · ${m.sub}`} onClick={() => onMode(m.id)}
-              className={cx("flex h-10 [@media(max-height:700px)]:h-9 items-center justify-center gap-2 rounded-2xl border px-2 text-[12px] font-medium transition active:scale-95", mode === m.id ? "border-[#f3efe8] bg-[#f3efe8] text-[#141210]" : "border-white/10 text-zinc-300 hover:border-white/25")}>
+              className={cx("flex h-10 [@media(max-height:700px)]:h-9 items-center justify-center gap-2 rounded-2xl border px-2 text-[12px] font-medium transition active:scale-95", mode === m.id ? "chip-pop border-[#f3efe8] bg-[#f3efe8] text-[#141210]" : "border-white/10 text-zinc-300 hover:border-white/25")}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="shrink-0">{DOCK_ICONS[m.id]}</svg>
               <span className="leading-tight">{m.sub}<span className="block text-[10px] font-normal opacity-70">हिन्दी · {m.id === "romantic_s" ? "sensual" : "romantic"}</span></span>
             </button>

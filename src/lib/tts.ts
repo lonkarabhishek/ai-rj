@@ -1,9 +1,11 @@
-// Server-only TTS providers: Azure Speech (primary), ElevenLabs (optional). Env is read per call.
+// Server-only TTS providers. Free path: Gemini TTS (neural, small free daily allowance) and/or your own self-hosted voice server;
+// optional: Azure Speech, ElevenLabs. When none can speak, the client falls back to the device's built-in voice. Env is read per call.
+import { GEMINI_VOICES, GeminiError, geminiSpeech, geminiTtsEnabled } from "./gemini";
 import { isRomantic, ROMANTIC_MODES, type Energy, type Language, type ListenMode } from "./prefs";
 
 export interface VoiceInfo {
-  id: string;            // "azure:<ShortName>" or ElevenLabs voice id (no prefix, for backward compat)
-  provider: "azure" | "elevenlabs";
+  id: string;            // "gemini:<Voice>", "local:<voice>", "azure:<ShortName>", "auto", "browser", or an ElevenLabs voice id (no prefix, for backward compat)
+  provider: "gemini" | "local" | "azure" | "elevenlabs" | "system";
   name: string;
   locale?: string;
   gender?: string;
@@ -13,6 +15,15 @@ export interface VoiceInfo {
 }
 
 export const isAzureId = (id: string) => id.startsWith("azure:");
+export type TtsProvider = "gemini" | "local" | "azure" | "elevenlabs";
+/** Which provider a saved voice id belongs to. Unknown / "auto" / empty = let the server choose. Un-prefixed ids are legacy ElevenLabs ids. */
+export function voiceProvider(id?: string | null): TtsProvider | null {
+  if (!id || id === "auto" || id === "browser") return null;
+  if (id.startsWith("gemini:")) return "gemini";
+  if (id.startsWith("local:")) return "local";
+  if (id.startsWith("azure:")) return "azure";
+  return /^[A-Za-z0-9]{16,40}$/.test(id) ? "elevenlabs" : null; // anything else (e.g. an old bare Azure name) is treated as "auto"
+}
 const azureKey = () => process.env.AZURE_SPEECH_KEY;
 const azureRegion = () => process.env.AZURE_SPEECH_REGION || "centralindia";
 // Test hook: lets us point at a mock server. Not needed in production.
@@ -33,6 +44,8 @@ export const AZURE_CURATED: VoiceInfo[] = [
   ["mr-IN-AarohiNeural", "Aarohi", "mr-IN", "Female", []],
   ["mr-IN-ManoharNeural", "Manohar", "mr-IN", "Male", []],
   ["en-US-AvaMultilingualNeural", "Ava (multilingual)", "en-US", "Female", []],
+  ["es-MX-DaliaNeural", "Dalia (Spanish)", "es-MX", "Female", []],
+  ["es-MX-JorgeNeural", "Jorge (Spanish)", "es-MX", "Male", []],
   ["en-US-AndrewMultilingualNeural", "Andrew (multilingual)", "en-US", "Male", []],
 ].map(([short, name, locale, gender, styles]) => ({
   id: `azure:${short}`, provider: "azure" as const, name: name as string, locale: locale as string, gender: gender as string,
@@ -40,12 +53,12 @@ export const AZURE_CURATED: VoiceInfo[] = [
 }));
 
 function localeLabel(l: string) {
-  return ({ "en-IN": "English (India)", "hi-IN": "Hindi", "mr-IN": "Marathi", "en-US": "Multilingual" } as Record<string, string>)[l] ?? l;
+  return ({ "en-IN": "English (India)", "hi-IN": "Hindi", "mr-IN": "Marathi", "en-US": "English (US)", "es-MX": "Spanish (Mexico)", "es-US": "Spanish (US)" } as Record<string, string>)[l] ?? l;
 }
 
 /** Best default Azure voice per RJ language (calm Indian female). */
 export function defaultAzureVoice(lang: Language) {
-  return lang === "hindi" ? "azure:hi-IN-SwaraNeural" : lang === "marathi" ? "azure:mr-IN-AarohiNeural" : "azure:en-IN-NeerjaNeural";
+  return lang === "hindi" ? "azure:hi-IN-SwaraNeural" : lang === "marathi" ? "azure:mr-IN-AarohiNeural" : lang === "spanish" ? "azure:es-MX-DaliaNeural" : lang === "english" ? "azure:en-US-AvaMultilingualNeural" : "azure:en-IN-NeerjaNeural";
 }
 
 export async function listAzureVoices(): Promise<VoiceInfo[]> {
@@ -54,8 +67,8 @@ export async function listAzureVoices(): Promise<VoiceInfo[]> {
     const r = await fetch(`${azureBase()}/cognitiveservices/voices/list`, { headers: { "Ocp-Apim-Subscription-Key": azureKey()! } });
     if (!r.ok) throw new Error(String(r.status));
     const all = (await r.json()) as { ShortName: string; DisplayName: string; Locale: string; Gender: string; StyleList?: string[]; SecondaryLocaleList?: string[] }[];
-    const live = all.filter((v) => ["hi-IN", "mr-IN", "en-IN"].includes(v.Locale) || (/Multilingual/.test(v.ShortName) && v.SecondaryLocaleList?.includes("hi-IN")) || (/Multilingual/.test(v.ShortName) && v.Locale === "en-US"))
-      .map((v) => ({ id: `azure:${v.ShortName}`, provider: "azure" as const, name: v.DisplayName + (v.Locale === "hi-IN" ? " (Hindi)" : v.Locale === "mr-IN" ? " (Marathi)" : /Multilingual/.test(v.ShortName) ? " (multilingual)" : ""),
+    const live = all.filter((v) => ["hi-IN", "mr-IN", "en-IN", "es-MX", "es-US"].includes(v.Locale) || (/Multilingual/.test(v.ShortName) && v.SecondaryLocaleList?.includes("hi-IN")) || (/Multilingual/.test(v.ShortName) && v.Locale === "en-US"))
+      .map((v) => ({ id: `azure:${v.ShortName}`, provider: "azure" as const, name: v.DisplayName + (v.Locale.startsWith("es-") ? " (Spanish)" : v.Locale === "hi-IN" ? " (Hindi)" : v.Locale === "mr-IN" ? " (Marathi)" : /Multilingual/.test(v.ShortName) ? " (multilingual)" : ""),
         locale: v.Locale, gender: v.Gender, styles: v.StyleList ?? [], labels: { gender: v.Gender.toLowerCase(), accent: localeLabel(v.Locale) } }));
     // keep curated ordering first (so Neerja stays default), then the rest
     const order = AZURE_CURATED.map((c) => c.id);
@@ -125,6 +138,69 @@ async function stylesFor(short: string): Promise<string[]> {
     } catch { styleCache = { at: Date.now() - 5.9 * 3600_000, map: new Map() }; }
   }
   return styleCache.map.get(short) ?? AZURE_CURATED.find((v) => v.id === `azure:${short}`)?.styles ?? [];
+}
+
+// ---------- Gemini TTS (free tier) ----------
+const GEMINI_STYLE: Record<Mood, string> = {
+  hype: "High-energy radio host firing up the listener: bright, punchy and grinning, quick pace, a real person on a live mic, never shouting.",
+  cheerful: "Upbeat, friendly radio host with a smile in the voice: conversational, easy pace, natural little pauses between thoughts.",
+  warm: "Warm, heartfelt radio host talking to one close friend: relaxed pace, gentle emphasis, unhurried pauses.",
+  calm: "Soft, calm late-night radio voice: slow, quiet and soothing, long relaxed pauses.",
+};
+/** Delivery direction for the voice model: mood first, then mode and energy nudges. The transcript itself is never changed. */
+export function geminiStyle(mood: Mood | undefined, mode: ListenMode, energy: Energy): string {
+  if (isRomantic(mode)) return mode === "romantic_f"
+    ? "Intimate late-night Hindi radio host: soft, sultry and unhurried, close to the microphone, tender pauses."
+    : "Intimate late-night Hindi radio host: deep, slow and confident, close to the microphone, long pauses.";
+  const m = mood && GEMINI_STYLE[mood] ? mood : MODE_MOOD[mode] ?? "cheerful";
+  const nudge = mode === "gym" ? " Gym-floor coach energy." : mode === "focus" ? " Barely above a murmur, so it never breaks concentration." : mode === "drive" ? " Road-trip buddy riding along." : "";
+  const en = energy === "chill" && m !== "calm" ? " Keep it mellow." : energy === "hype" && m !== "hype" ? " A little extra spark." : "";
+  return GEMINI_STYLE[m] + nudge + en;
+}
+/** Default Gemini voice per session type (the listener can pick any other in Settings). */
+export function defaultGeminiVoice(mode: ListenMode = "default"): string {
+  return mode === "romantic_f" ? "Despina" : isRomantic(mode) ? "Algieba" : "Sulafat";
+}
+export const geminiVoiceList = (): VoiceInfo[] => geminiTtsEnabled() ? GEMINI_VOICES.map((v) => ({
+  id: `gemini:${v.name}`, provider: "gemini" as const, name: v.name, gender: v.gender, labels: { gender: v.gender, accent: v.tone, age: "follows your language" },
+})) : [];
+export async function geminiTts(text: string, voiceId: string | undefined, energy: Energy, mode: ListenMode, mood?: Mood): Promise<{ audio: ArrayBuffer; mime: string }> {
+  if (!geminiTtsEnabled()) throw new TtsError("gemini", "not_configured", "Gemini TTS not set up");
+  const asked = voiceId?.startsWith("gemini:") ? voiceId.slice(7) : "";
+  const voice = GEMINI_VOICES.some((v) => v.name === asked) ? asked : defaultGeminiVoice(mode);
+  try { return await geminiSpeech(text, voice, geminiStyle(mood, mode, energy), 20000); }
+  catch (e) {
+    const code = e instanceof GeminiError ? e.code : "error";
+    throw new TtsError("gemini", code === "quota_exhausted" || code === "rate_limited" ? "quota_exceeded" : code, e instanceof GeminiError ? e.message : "Gemini TTS failed");
+  }
+}
+
+// ---------- Self-hosted voice server (free, unlimited): any OpenAI-compatible /v1/audio/speech endpoint, e.g. Kokoro-FastAPI or a Piper wrapper ----------
+const localUrl = () => (process.env.LOCAL_TTS_URL ?? "").replace(/\/+$/, "");
+export const localEnabled = () => /^https?:\/\//.test(localUrl());
+const localVoices = () => (process.env.LOCAL_TTS_VOICES ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+/** LOCAL_TTS_VOICE is the default; LOCAL_TTS_VOICE_ES / _HI / _MR / _EN override it per RJ language. */
+function localVoiceFor(language: Language): string {
+  const k = language === "spanish" ? "ES" : language === "hindi" || language === "hinglish" ? "HI" : language === "marathi" ? "MR" : "EN";
+  return process.env[`LOCAL_TTS_VOICE_${k}`] || process.env.LOCAL_TTS_VOICE || "af_heart";
+}
+export const localVoiceList = (): VoiceInfo[] => localEnabled() ? [...new Set([process.env.LOCAL_TTS_VOICE || "af_heart", ...localVoices()])].map((v) => ({
+  id: `local:${v}`, provider: "local" as const, name: v, labels: { accent: "self-hosted" },
+})) : [];
+export async function localTts(text: string, voiceId: string | undefined, language: Language, mood?: Mood): Promise<{ audio: ArrayBuffer; mime: string }> {
+  if (!localEnabled()) throw new TtsError("local", "not_configured", "LOCAL_TTS_URL not set");
+  const voice = voiceId?.startsWith("local:") ? voiceId.slice(6).replace(/[^\w.+-]/g, "").slice(0, 60) : localVoiceFor(language);
+  const speed = mood === "hype" ? 1.08 : mood === "calm" ? 0.92 : 1;
+  const r = await fetch(`${localUrl()}/v1/audio/speech`, {
+    method: "POST", signal: AbortSignal.timeout(Number(process.env.LOCAL_TTS_TIMEOUT_MS ?? 15000)),
+    headers: { "Content-Type": "application/json", ...(process.env.LOCAL_TTS_API_KEY ? { Authorization: `Bearer ${process.env.LOCAL_TTS_API_KEY}` } : {}) },
+    body: JSON.stringify({ model: process.env.LOCAL_TTS_MODEL || "kokoro", input: text, voice, response_format: "mp3", speed }),
+  }).catch(() => null);
+  if (!r?.ok) throw new TtsError("local", r ? `http_${r.status}` : "network", `Voice server ${r?.status ?? "unreachable"}`);
+  const audio = await r.arrayBuffer();
+  if (audio.byteLength < 200) throw new TtsError("local", "empty", "Voice server returned no audio");
+  const ct = (r.headers.get("content-type") ?? "").split(";")[0];
+  return { audio, mime: /^audio\//.test(ct) ? ct : "audio/mpeg" };
 }
 
 export class TtsError extends Error { constructor(public provider: string, public code: string, msg: string) { super(msg); } }

@@ -1,8 +1,9 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 import { useEffect, useRef, useState } from "react";
-import { ROMANTIC_MODES, modeInfo, SONG_LANGS, toggleSongLang, DEFAULT_PREFS, ENERGIES, HUMORS, LANGUAGES, MODES, loadPrefs, savePrefs, type Prefs, type TrackInfo } from "@/lib/prefs";
+import { AUTO_VOICE, BROWSER_VOICE, SPEECH_LANG, ROMANTIC_MODES, modeInfo, SONG_LANGS, toggleSongLang, DEFAULT_PREFS, ENERGIES, HUMORS, LANGUAGES, MODES, loadPrefs, savePrefs, type Prefs, type TrackInfo } from "@/lib/prefs";
 import { getMe } from "@/lib/spotifyClient";
+import { speakText } from "@/lib/browserVoice";
 import { Button, Chip, Section, Spinner, cx, inputCls } from "./ui";
 import { AccountPanel } from "./account";
 
@@ -23,7 +24,7 @@ export function usePrefs(): [Prefs, Up, boolean, (p: Prefs) => void] {
   return [p, up, loaded, set];
 }
 
-type Voice = { id: string; provider: "azure" | "elevenlabs"; name: string; locale?: string; labels: Record<string, string>; previewUrl?: string };
+type Voice = { id: string; provider: "gemini" | "local" | "azure" | "elevenlabs" | "system"; name: string; locale?: string; labels: Record<string, string>; previewUrl?: string };
 let voiceCache: Voice[] | null = null;
 export function useVoices() {
   const [voices, setVoices] = useState<Voice[]>(voiceCache ?? []);
@@ -110,11 +111,7 @@ export function VoicePicker({ p, up, compact }: { p: Prefs; up: Up; compact?: bo
   const [rjBusy, setRjBusy] = useState(false);
   const audio = useRef<HTMLAudioElement | null>(null);
   useEffect(() => {
-    if (!p.voiceId && voices[0]) {
-      const want = p.language === "hindi" ? "azure:hi-IN-SwaraNeural" : p.language === "marathi" ? "azure:mr-IN-AarohiNeural" : "azure:en-IN-NeerjaNeural";
-      const v = voices.find((x) => x.id === want) ?? voices[0];
-      up("voiceId", v.id); up("voiceName", v.name);
-    }
+    if (!p.voiceId && voices[0]) { up("voiceId", AUTO_VOICE); up("voiceName", "Automatic"); } // the server picks the best voice it has
   }, [voices]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => audio.current?.pause(), []);
 
@@ -124,31 +121,45 @@ export function VoicePicker({ p, up, compact }: { p: Prefs; up: Up; compact?: bo
     a.onended = () => setPlaying(null); a.onerror = () => setPlaying(null);
     a.play().catch(() => setPlaying(null));
   }
+  const SAMPLE: Record<Prefs["language"], (rj: string) => string> = {
+    english: (rj) => `Hey ${p.listenerName}, this is ${rj}. Ready when you are.`,
+    spanish: (rj) => `Hola ${p.listenerName}, soy ${rj}. Cuando quieras, empezamos.`,
+    hinglish: (rj) => `Hello ${p.listenerName}, main hoon ${rj}. Chalo shuru karte hain!`,
+    hindi: (rj) => `नमस्ते ${p.listenerName}, मैं हूँ ${rj}। चलिए शुरू करते हैं!`,
+    marathi: (rj) => `नमस्कार ${p.listenerName}, मी ${rj}. चला सुरू करूया!`,
+  };
+  /** Plays a sample. Neural voices come from the server (each preview uses a little of the free allowance); if that fails, the device voice speaks. */
+  async function say(text: string, voiceId: string, id: string, mode?: Prefs["defaultMode"]) {
+    setPlaying(id);
+    const device = async () => { const sp = await speakText(text, SPEECH_LANG[p.language] ?? "en-US", "cheerful"); await sp.done; setPlaying((x) => (x === id ? null : x)); };
+    if (voiceId === BROWSER_VOICE) return device();
+    const r = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, voiceId, energy: p.energy, language: p.language, mode }) }).catch(() => null);
+    if (r?.ok) play(URL.createObjectURL(await r.blob()), id); else await device();
+  }
   async function preview(v: Voice) {
     if (v.previewUrl) return play(v.previewUrl, v.id);
-    setPlaying(v.id);
-    const sample = v.locale === "hi-IN" ? `नमस्ते ${p.listenerName}, मैं हूँ आपकी RJ।` : v.locale === "mr-IN" ? `नमस्कार ${p.listenerName}, मी तुमचा RJ.` : `Hey ${p.listenerName}, this is your RJ. Ready when you are.`;
-    const r = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: sample, voiceId: v.id, energy: p.energy, language: p.language }) }).catch(() => null);
-    if (r?.ok) play(URL.createObjectURL(await r.blob()), v.id); else setPlaying(null);
+    const text = v.locale === "hi-IN" ? `नमस्ते ${p.listenerName}, मैं हूँ आपकी RJ।` : v.locale === "mr-IN" ? `नमस्कार ${p.listenerName}, मी तुमचा RJ.` : v.locale?.startsWith("es-") ? SAMPLE.spanish("tu RJ") : (SAMPLE[p.language] ?? SAMPLE.english)(p.language === "spanish" ? "tu RJ" : "your RJ");
+    await say(text, v.id, v.id);
   }
   async function hearAsRj() {
     setRjBusy(true);
-    try {
-      const lines = { english: `Hey ${p.listenerName}, this is ${p.rjName}. Ready when you are.`, hinglish: `Hello ${p.listenerName}, main hoon ${p.rjName}. Chalo shuru karte hain!`, hindi: `नमस्ते ${p.listenerName}, मैं हूँ ${p.rjName}। चलिए शुरू करते हैं!`, marathi: `नमस्कार ${p.listenerName}, मी ${p.rjName}. चला सुरू करूया!` };
-      const r = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: lines[p.language], voiceId: p.voiceId, energy: p.energy, language: p.language, mode: p.defaultMode }) });
-      if (r.ok) play(URL.createObjectURL(await r.blob()), "rj");
-    } finally { setRjBusy(false); }
+    try { await say((SAMPLE[p.language] ?? SAMPLE.english)(p.rjName), p.voiceId, "rj", p.defaultMode); } finally { setRjBusy(false); }
   }
+  function stopPreview() { audio.current?.pause(); try { window.speechSynthesis?.cancel(); } catch { /* ignore */ } setPlaying(null); }
 
   const groups: [string, Voice[]][] = [];
   const add = (label: string, list: Voice[]) => { if (list.length) groups.push([label, list]); };
   const az = voices.filter((v) => v.provider === "azure");
+  add("Recommended", voices.filter((v) => v.provider === "system"));
+  add("Studio voices · Gemini (free daily allowance)", voices.filter((v) => v.provider === "gemini"));
+  add("Your own voice server", voices.filter((v) => v.provider === "local"));
+  add("Azure · Spanish", az.filter((v) => v.locale?.startsWith("es-")));
   add("Azure · English (India)", az.filter((v) => v.locale === "en-IN"));
   add("Azure · Hindi", az.filter((v) => v.locale === "hi-IN"));
   add("Azure · Marathi", az.filter((v) => v.locale === "mr-IN"));
-  add("Azure · Multilingual", az.filter((v) => !["en-IN", "hi-IN", "mr-IN"].includes(v.locale ?? "")));
+  add("Azure · Multilingual", az.filter((v) => !["en-IN", "hi-IN", "mr-IN"].includes(v.locale ?? "") && !v.locale?.startsWith("es-")));
   add("ElevenLabs", voices.filter((v) => v.provider === "elevenlabs"));
-  if (error) return <p className="text-sm text-red-300">{error}. Add an Azure Speech or ElevenLabs key.</p>;
+  if (error) return <p className="text-sm text-red-300">{error}. Your device&apos;s own voice will be used.</p>;
   if (!voices.length) return <div className="flex items-center gap-2 text-sm text-zinc-500"><Spinner /> Loading voices…</div>;
   return (
     <div className="space-y-3">
@@ -160,10 +171,10 @@ export function VoicePicker({ p, up, compact }: { p: Prefs; up: Up; compact?: bo
         {list.map((v) => {
           const on = p.voiceId === v.id;
           return (
-            <div key={v.id} onClick={() => { up("voiceId", v.id); up("voiceName", v.name); }}
+            <div key={v.id} role="radio" aria-checked={on} tabIndex={0} data-voice={v.id} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); up("voiceId", v.id); up("voiceName", v.name); } }} onClick={() => { up("voiceId", v.id); up("voiceName", v.name); }}
               className={cx("flex cursor-pointer items-center gap-3 rounded-2xl border px-3 py-2.5 transition", on ? "border-white bg-white/10" : "border-white/10 hover:border-white/25")}>
-              <button onClick={(e) => { e.stopPropagation(); if (playing === v.id) { audio.current?.pause(); setPlaying(null); } else preview(v); }}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-xs hover:bg-white/20" aria-label="Preview">{playing === v.id ? "❚❚" : "▶"}</button>
+              <button onClick={(e) => { e.stopPropagation(); if (playing === v.id) stopPreview(); else preview(v); }}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/10 text-xs hover:bg-white/20" aria-label={`Preview ${v.name}`}>{playing === v.id ? "❚❚" : "▶"}</button>
               <div className="min-w-0">
                 <div className="truncate text-sm font-medium">{v.name.split(" - ")[0]}</div>
                 <div className="truncate text-xs text-zinc-500 capitalize">{[v.labels.gender, v.labels.accent, v.labels.age].filter(Boolean).join(" · ").replace(/_/g, " ")}</div>
@@ -369,11 +380,11 @@ export function MusicImport({ p, up }: { p: Prefs; up: Up }) {
 
 export function SongLangPicker({ p, up, small }: { p: Prefs; up: Up; small?: boolean }) {
   return (
-    <div className="flex flex-wrap gap-1.5">
+    <div className={small ? "scroll-row flex gap-1.5 overflow-x-auto no-scrollbar" : "flex flex-wrap gap-1.5"}>
       {SONG_LANGS.map((l) => {
         const on = p.songLangs.includes(l.id);
         return <button key={l.id} type="button" aria-pressed={on} onClick={() => up("songLangs", toggleSongLang(p.songLangs, l.id))}
-          className={cx("rounded-full border px-3.5 transition active:scale-95", small ? "h-8 text-[13px] [@media(max-height:700px)]:h-7 [@media(max-height:700px)]:text-[12px]" : "h-9 text-sm", on ? "border-[#f3efe8] bg-[#f3efe8] text-[#141210]" : "border-white/10 text-zinc-300 hover:border-white/25")}>{l.label}</button>;
+          className={cx("shrink-0 rounded-full border px-3.5 transition active:scale-95", small ? "h-8 text-[13px] [@media(max-height:700px)]:h-7 [@media(max-height:700px)]:text-[12px]" : "h-9 text-sm", on ? "border-[#f3efe8] bg-[#f3efe8] text-[#141210]" : "border-white/10 text-zinc-300 hover:border-white/25")}>{l.label}</button>;
       })}
     </div>
   );

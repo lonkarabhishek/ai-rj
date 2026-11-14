@@ -1,4 +1,4 @@
-export type Language = "english" | "hindi" | "hinglish" | "marathi";
+export type Language = "english" | "spanish" | "hindi" | "hinglish" | "marathi";
 export type Humor = "off" | "clean" | "normal" | "witty" | "dark";
 export type Energy = "chill" | "balanced" | "hype";
 
@@ -28,7 +28,7 @@ export const DEFAULT_PREFS: Prefs = {
   listenerName: "friend",
   voiceId: "",
   energy: "balanced",
-  language: "hinglish",
+  language: "english",
   humor: "normal",
   newsTopics: ["AI"],
   source: "top",
@@ -41,9 +41,9 @@ export const DEFAULT_PREFS: Prefs = {
   justMusic: false,
   music: "spotify",
 };
-export type SongLang = "any" | "hindi" | "english" | "punjabi" | "marathi" | "tamil" | "telugu";
+export type SongLang = "any" | "hindi" | "english" | "spanish" | "punjabi" | "marathi" | "tamil" | "telugu";
 export const SONG_LANGS: { id: SongLang; label: string }[] = [
-  { id: "any", label: "Any" }, { id: "hindi", label: "Hindi" }, { id: "english", label: "English" }, { id: "punjabi", label: "Punjabi" },
+  { id: "any", label: "Any" }, { id: "hindi", label: "Hindi" }, { id: "english", label: "English" }, { id: "spanish", label: "Spanish" }, { id: "punjabi", label: "Punjabi" },
   { id: "marathi", label: "Marathi" }, { id: "tamil", label: "Tamil" }, { id: "telugu", label: "Telugu" },
 ];
 export function toggleSongLang(cur: SongLang[], id: SongLang): SongLang[] {
@@ -55,6 +55,7 @@ export function toggleSongLang(cur: SongLang[], id: SongLang): SongLang[] {
 
 export const LANGUAGES: { id: Language; label: string }[] = [
   { id: "english", label: "English" },
+  { id: "spanish", label: "Español" },
   { id: "hindi", label: "हिन्दी (Hindi)" },
   { id: "hinglish", label: "Hinglish" },
   { id: "marathi", label: "मराठी (Marathi)" },
@@ -74,6 +75,10 @@ export function loadPrefs(): Prefs {
     return DEFAULT_PREFS;
   }
 }
+/** BCP-47 tag the browser voice should use for each RJ language. */
+export const SPEECH_LANG: Record<Language, string> = { english: "en-US", spanish: "es-MX", hinglish: "hi-IN", hindi: "hi-IN", marathi: "mr-IN" };
+/** Voice ids: "auto" lets the server pick the best available neural voice; "browser" always uses the device's own voice (free, offline). */
+export const AUTO_VOICE = "auto", BROWSER_VOICE = "browser";
 export function savePrefs(p: Prefs) {
   localStorage.setItem(KEY, JSON.stringify(p));
   window.dispatchEvent(new Event("myrj:prefs"));

@@ -1,4 +1,5 @@
 import { connection } from "next/server";
+import { guard } from "@/lib/guard";
 import { ytAccessToken } from "@/lib/youtube";
 import { ytSearch } from "@/lib/ytmusic";
 
@@ -7,6 +8,7 @@ export const maxDuration = 60;
 
 export async function GET(req: Request) {
   await connection();
+  const no = guard(req, "yt-search", 20); if (no) return no; // each search costs 100 of the 10,000 daily quota units
   const u = new URL(req.url), q = (u.searchParams.get("q") ?? "").slice(0, 120);
   if (!q) return Response.json({ videos: [] });
   const token = await ytAccessToken().catch(() => null);

@@ -15,7 +15,8 @@ export async function GET(req: NextRequest) {
     const t = await tokenRequest({ grant_type: "authorization_code", code, redirect_uri: process.env.SPOTIFY_REDIRECT_URI! });
     const uid = await currentUserId();
     if (uid && t.refresh_token) await saveProviderToken(uid, "spotify", t.refresh_token, (t as { scope?: string }).scope);
-    const back = req.cookies.get("sp_return")?.value ?? "/settings";
+    const saved = req.cookies.get("sp_return")?.value ?? "";
+    const back = /^\/(?!\/)[a-z0-9/_?=&-]*$/i.test(saved) ? saved : "/settings"; // same-site path only (never an open redirect)
     const res = NextResponse.redirect(`${origin}${back}${back.includes("?") ? "&" : "?"}spotify=connected`);
     res.cookies.delete("sp_return");
     res.cookies.delete("sp_state");

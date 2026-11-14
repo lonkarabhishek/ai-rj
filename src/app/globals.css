@@ -33,6 +33,10 @@ body { font-family: var(--font-sans); letter-spacing: -0.005em; }
 .sheet-up { animation: sheet-up .35s cubic-bezier(.2,.8,.2,1) both; }
 .breathe { animation: breathe 3.2s ease-in-out infinite; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }
+/* one-line chip rows that scroll sideways on small phones; the right edge fades to hint at more */
+.scroll-row { -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; scroll-snap-type: x proximity; -webkit-mask-image: linear-gradient(90deg, #000 86%, transparent); mask-image: linear-gradient(90deg, #000 86%, transparent); padding-right: 28px; }
+.scroll-row > * { scroll-snap-align: start; }
 
 /* iOS 26-style liquid glass dock */
 .liquid-glass {
@@ -99,3 +103,118 @@ main > * { animation: fade-up .45s cubic-bezier(.2,.8,.2,1) both; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
   button:not(:disabled):active { transform: none; }
 }
+
+/* =====================================================================================================
+   Premium pass: refined glass, mode-tinted aurora, visualizer, dock. Motion is transform/opacity only
+   (GPU friendly), pauses with the music, and is switched off under prefers-reduced-motion.
+   ===================================================================================================== */
+:root {
+  --tint-a: 255 196 140; /* warm amber: My Mix */
+  --tint-b: 255 138 150;
+  --glass-bg: 255 255 255;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+}
+[data-mode="gym"] { --tint-a: 255 120 80; --tint-b: 255 196 92; }
+[data-mode="drive"] { --tint-a: 96 190 255; --tint-b: 140 150 255; }
+[data-mode="focus"] { --tint-a: 100 220 200; --tint-b: 120 150 255; }
+[data-mode^="romantic"] { --tint-a: 255 120 170; --tint-b: 190 120 255; }
+
+html { overscroll-behavior-y: none; }
+body { -webkit-touch-callout: none; }
+button, [role="radio"], [role="button"], .no-select { -webkit-user-select: none; user-select: none; }
+
+/* Aurora: two soft colour fields behind everything, drifting slowly. Tint follows the station mode. */
+.aurora { position: fixed; inset: 0; z-index: -2; overflow: hidden; pointer-events: none; contain: strict; }
+.aurora i { position: absolute; display: block; border-radius: 50%; opacity: .0; filter: blur(64px); will-change: transform, opacity; transition: opacity 1.4s ease, background-color 1.4s ease; }
+.aurora i:nth-child(1) { width: 78vmax; height: 78vmax; left: -28vmax; top: -30vmax; background: rgb(var(--tint-a)); animation: drift-a 26s ease-in-out infinite alternate; }
+.aurora i:nth-child(2) { width: 70vmax; height: 70vmax; right: -30vmax; bottom: -26vmax; background: rgb(var(--tint-b)); animation: drift-b 32s ease-in-out infinite alternate; }
+.aurora i { opacity: .1; }
+.aurora.is-live i { opacity: .24; }
+.aurora.is-paused i { animation-play-state: paused; opacity: .12; }
+@keyframes drift-a { from { transform: translate3d(0, 0, 0) scale(1); } to { transform: translate3d(9vmax, 7vmax, 0) scale(1.12); } }
+@keyframes drift-b { from { transform: translate3d(0, 0, 0) scale(1.08); } to { transform: translate3d(-8vmax, -6vmax, 0) scale(.96); } }
+
+/* Glass: a readable frosted panel. Blur is modest on purpose (heavy blur costs battery on phones and washes out text). */
+.glass {
+  background: linear-gradient(180deg, rgb(var(--glass-bg) / .075), rgb(var(--glass-bg) / .03));
+  border: 1px solid rgb(255 255 255 / .09);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / .09), 0 10px 30px -18px rgb(0 0 0 / .7);
+  backdrop-filter: blur(18px) saturate(150%); -webkit-backdrop-filter: blur(18px) saturate(150%);
+}
+.glass-card {
+  position: relative; border-radius: 30px;
+  background: linear-gradient(165deg, rgb(255 255 255 / .09), rgb(255 255 255 / .025) 55%, rgb(255 255 255 / .05));
+  border: 1px solid rgb(255 255 255 / .1);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / .14), inset 0 -1px 0 rgb(255 255 255 / .03), 0 30px 70px -34px rgb(0 0 0 / .85);
+  backdrop-filter: blur(22px) saturate(160%); -webkit-backdrop-filter: blur(22px) saturate(160%);
+}
+.glass-sheet {
+  background: linear-gradient(180deg, rgb(32 30 28 / .82), rgb(14 13 12 / .93));
+  border-top: 1px solid rgb(255 255 255 / .12);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / .1), 0 -24px 60px -20px rgb(0 0 0 / .8);
+  backdrop-filter: blur(28px) saturate(170%); -webkit-backdrop-filter: blur(28px) saturate(170%);
+}
+/* Without backdrop-filter (older browsers, some low-power modes) panels fall back to a solid tone so text stays readable. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass, .glass-card { background: rgb(28 26 24 / .92); }
+  .glass-sheet, .liquid-glass { background: rgb(18 17 16 / .97); }
+}
+
+/* Player dock: frosted, thumb-reachable, sits above the home indicator. */
+.dock { border-radius: 36px; padding: 8px 10px; }
+.dock-btn { display: flex; height: 52px; min-width: 52px; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border-radius: 26px; color: rgb(212 212 216); font-size: 10px; font-weight: 500; letter-spacing: .02em; }
+.dock-btn:not(:disabled):active { background: rgb(255 255 255 / .1); }
+.dock-btn:disabled { opacity: .4; }
+@media (hover: hover) { .dock-btn:not(:disabled):hover { color: #fff; background: rgb(255 255 255 / .06); } }
+.play-btn { position: relative; isolation: isolate; }
+.play-btn::before { content: ""; position: absolute; inset: -7px; z-index: -1; border-radius: 50%; border: 1px solid rgb(var(--tint-a) / .55); opacity: 0; transform: scale(.9); }
+.play-btn.is-playing::before { animation: ring 2.6s cubic-bezier(.2,.7,.2,1) infinite; }
+@keyframes ring { 0% { opacity: .7; transform: scale(.92); } 70%, 100% { opacity: 0; transform: scale(1.22); } }
+.play-btn svg { transition: transform .32s cubic-bezier(.34,1.45,.5,1), opacity .2s ease; }
+.play-btn .ico { position: absolute; }
+.play-btn .ico[data-on="false"] { opacity: 0; transform: scale(.4) rotate(-40deg); }
+.play-btn .ico[data-on="true"] { opacity: 1; transform: none; }
+
+/* Artwork: gentle float while playing, a tinted halo behind it. */
+.art-wrap { position: relative; }
+.art-wrap::after { content: ""; position: absolute; inset: 8%; z-index: -1; border-radius: 40px; background: radial-gradient(closest-side, rgb(var(--tint-a) / .5), transparent); filter: blur(34px); opacity: 0; transition: opacity 1s ease; }
+.art-wrap.is-playing::after { opacity: .55; animation: halo 5.5s ease-in-out infinite alternate; }
+.art-wrap.is-playing .art-img { animation: art-float 7s ease-in-out infinite; }
+@keyframes halo { from { transform: scale(.94); } to { transform: scale(1.08); } }
+@keyframes art-float { 0%, 100% { transform: translate3d(0, 0, 0) scale(1); } 50% { transform: translate3d(0, -4px, 0) scale(1.012); } }
+.art-swap { animation: art-in .7s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes art-in { from { opacity: 0; transform: scale(.9) rotate(-2deg); filter: blur(8px); } to { opacity: 1; transform: none; filter: none; } }
+.track-in { animation: track-in .55s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes track-in { from { opacity: 0; transform: translate3d(0, 12px, 0); } to { opacity: 1; transform: none; } }
+
+/* Visualizer bars */
+.viz { display: flex; height: 28px; align-items: center; justify-content: center; gap: 3px; opacity: 0; transition: opacity .6s ease; }
+.viz.is-on { opacity: 1; }
+.viz span { display: block; width: 3px; height: 100%; border-radius: 3px; transform: scaleY(.14); transform-origin: center; background: linear-gradient(180deg, rgb(var(--tint-a)), rgb(var(--tint-b))); opacity: .85; will-change: transform; }
+.viz.is-on span { animation-name: viz; animation-timing-function: ease-in-out; animation-iteration-count: infinite; animation-direction: alternate; }
+.viz.is-paused span, .viz[data-reactive="1"] span { animation-play-state: paused; }
+.viz[data-reactive="1"] span { animation: none; transition: transform .09s linear; }
+@keyframes viz { 0% { transform: scaleY(.16); } 35% { transform: scaleY(.9); } 60% { transform: scaleY(.38); } 100% { transform: scaleY(.7); } }
+
+/* On-air pill and progress */
+.onair-pill { box-shadow: 0 0 0 1px rgb(var(--tint-a) / .28), 0 8px 26px -10px rgb(var(--tint-a) / .5); }
+.progress-fill { background: linear-gradient(90deg, rgb(var(--tint-a)), rgb(var(--tint-b))); }
+.chip-pop { animation: chip-pop .38s cubic-bezier(.34,1.5,.5,1); }
+@keyframes chip-pop { 0% { transform: scale(.92); } 60% { transform: scale(1.05); } 100% { transform: scale(1); } }
+.reveal { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .35s cubic-bezier(.2,.8,.2,1); }
+.reveal.is-open { grid-template-rows: 1fr; }
+.reveal > div { overflow: hidden; min-height: 0; }
+.live-badge { animation: live-in .5s cubic-bezier(.34,1.45,.5,1) both; }
+@keyframes live-in { from { opacity: 0; transform: scale(.7); } to { opacity: 1; transform: none; } }
+
+/* Standalone (installed to the home screen): no browser chrome, so keep content clear of the status bar and home indicator. */
+@media (display-mode: standalone) { body { min-height: 100dvh; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora i, .viz span, .art-wrap.is-playing .art-img, .art-wrap.is-playing::after, .play-btn.is-playing::before { animation: none !important; }
+  .viz.is-on span { transform: scaleY(.45); }
+  .viz.is-on span:nth-child(3n) { transform: scaleY(.75); }
+  .viz.is-on span:nth-child(4n) { transform: scaleY(.28); }
+}
+/* Low-power hint: when the page is hidden or the show is paused nothing should be animating. */
+.is-paused .art-img, .is-paused::after { animation-play-state: paused !important; }

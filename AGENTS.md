@@ -44,11 +44,15 @@ Copy `.env.example` to `.env.local`. Ask the human for each value.
 
 | Variable | Required? | Where to get it |
 | --- | --- | --- |
-| `ANTHROPIC_API_KEY` | Recommended (templates otherwise) | https://console.anthropic.com → API Keys |
+| `GEMINI_API_KEY` | Recommended for the free setup (templates otherwise) | https://aistudio.google.com/apikey (free tier, no card). Server-side only |
+| `GEMINI_MODEL`, `GEMINI_MODEL_FULL` | Optional | Script models; default `gemini-3.5-flash-lite`. `GEMINI_MODEL_FULL` (e.g. `gemini-3.8-flash`) is tried first for full breaks |
+| `GEMINI_TTS_MODELS`, `GEMINI_TTS` | Optional | Voice models in order (default `gemini-3.8-flash-lite-tts,gemini-3.8-flash-tts`); `GEMINI_TTS=off` disables the Gemini voice |
+| `LOCAL_TTS_URL`, `LOCAL_TTS_VOICE`, `LOCAL_TTS_VOICE_ES/_HI/_MR/_EN`, `LOCAL_TTS_VOICES`, `LOCAL_TTS_MODEL`, `LOCAL_TTS_API_KEY` | Optional | Your own OpenAI-compatible voice server (Kokoro, Piper). See docs/VOICES.md |
+| `ANTHROPIC_API_KEY` | Optional (paid; used after Gemini) | https://console.anthropic.com → API Keys |
 | `ANTHROPIC_MODEL` | Optional | Fast model for stingers, switch lines and the fallback; default `claude-haiku-5-5` |
 | `ANTHROPIC_MODEL_SENSUAL` | Optional | Writer for every line (and the short stories) in Romantic Hindi · Sensual; default `claude-sonnet-5-5` |
 | `ANTHROPIC_MODEL_FULL` | Optional | Writer for full breaks and show segments; default `claude-sonnet-5-5` (costs more than Haiku; set it to the Haiku id to keep costs down) |
-| `AZURE_SPEECH_KEY` | Recommended (browser voice otherwise) | Azure Portal → Speech service → Keys and Endpoint |
+| `AZURE_SPEECH_KEY` | Optional (Gemini voice, then the device voice otherwise) | Azure Portal → Speech service → Keys and Endpoint |
 | `AZURE_SPEECH_REGION` | With the Azure key (default `centralindia`) | Same page, "Location/Region" |
 | `AZURE_TTS_BASE` | Optional | Custom TTS base URL |
 | `ELEVENLABS_API_KEY` | Optional | https://elevenlabs.io → Profile → API key |
@@ -62,7 +66,7 @@ Copy `.env.example` to `.env.local`. Ask the human for each value.
 | `TOKEN_ENCRYPTION_KEY` | With Supabase | Generate: `openssl rand -base64 32`. Set once and never change it |
 | `OPENAI_API_KEY` / `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_TIMEOUT_MS` | Optional alternative to Claude | Any OpenAI-compatible provider |
 
-Minimum useful setup: Anthropic + Azure Speech + one music source (Spotify **or** Google/YouTube). Restart the dev server after editing `.env.local`.
+Minimum useful setup: `GEMINI_API_KEY` + one music source (Spotify **or** Google/YouTube). Full guide: [docs/FREE-SETUP.md](docs/FREE-SETUP.md). Restart the dev server after editing `.env.local`.
 
 ## Supabase (optional)
 
@@ -91,8 +95,8 @@ Minimum useful setup: Anthropic + Azure Speech + one music source (Spotify **or*
 2. Status routes (all safe, no side effects):
    - `curl -s http://127.0.0.1:3000/api/youtube/songs?status` → `{"configured":true/false,"connected":...}` (configured means Google keys are set; connected means the human signed in).
    - `curl -s http://127.0.0.1:3000/api/spotify/token` → `401 {"connected":false}` until Spotify is connected; `200` with a token once connected.
-   - `curl -s http://127.0.0.1:3000/api/voices` → list of voices (non-empty when Azure/ElevenLabs keys work).
-   - `curl -s -X POST http://127.0.0.1:3000/api/segment -H 'content-type: application/json' -d '{"prefs":{"rjName":"Riya","language":"english","newsTopics":[]},"next":{"name":"Song","artists":"Artist"},"index":1,"kind":"full","mode":"default"}'` → JSON whose `mode` is `llm` (Claude works) or `template` (no/invalid Claude key).
+   - `curl -s http://127.0.0.1:3000/api/voices` → always lists `auto` and `browser`; `providers` shows which voice services are configured.
+   - `curl -s -X POST http://127.0.0.1:3000/api/segment -H 'content-type: application/json' -d '{"prefs":{"rjName":"Riya","language":"english","newsTopics":[]},"next":{"name":"Song","artists":"Artist"},"index":1,"kind":"full","mode":"default"}'` → JSON whose `mode` is `llm` (with `provider`: `gemini`, `claude` or `openai`) or `template` (no key, quota used up, or the writer failed).
 3. In the browser: sign in/connect a source, tap **Go Live**. Open **Playback details** (bottom of the live screen) to see `output`, `account`, `device`, `rj script` and `rj voice`. A red `●` marks an error.
 
 ## Project map
@@ -103,8 +107,8 @@ src/app/                 Next.js App Router
   live/page.tsx          the radio screen and the playback state machine (big file)
   settings/              settings page (uses components/prefs.tsx)
   login/, auth/callback/ Supabase sign-in
-  api/segment            RJ script (Claude, else templates); strips [tags]
-  api/tts, api/voices    Azure / ElevenLabs speech and voice list
+  api/segment            RJ script (Gemini → Claude → OpenAI-compatible → templates); validates input; strips [tags]
+  api/tts, api/voices    Voice chain (Gemini → own server → Azure → ElevenLabs) and voice list
   api/news               headlines
   api/import             screenshot / link import (Claude vision)
   api/auth/{spotify,youtube}, api/spotify/*, api/youtube/*   OAuth + data routes
@@ -112,7 +116,11 @@ src/lib/
   prefs.ts               Prefs type, defaults, localStorage load/save, modes
   script.ts              RJ prompt, llmScript(), templateScript(), splitMood()
   text.ts                stripTags(): removes [NEWS]/[hype]-style tags from RJ text
-  tts.ts                 Azure/ElevenLabs synthesis, curated voices, defaultAzureVoice()
+  gemini.ts              Gemini client: text + TTS, timeouts, 429 cooldowns, free-tier model defaults
+  llm.ts                 small LLM jobs (labels, import): Gemini first, Claude if set
+  guard.ts               same-origin check, in-memory rate limit, bounded JSON, private-host check
+  browserVoice.ts        device voice: async voice list, scoring per language, watchdog
+  tts.ts                 Gemini / self-hosted / Azure / ElevenLabs synthesis, voice ids, defaultAzureVoice()
   spotifyClient.ts       browser-side Spotify: token refresh, Curator, 429 backoff
   spotify.ts             server-side Spotify token helpers
   ytClient.ts            YouTube curator (YtCurator), language rules, NOT_A_SONG filter, YtPlayer (IFrame API)
@@ -129,7 +137,9 @@ Key behaviours to know before editing:
 - **Playback state machine:** `src/app/live/page.tsx` (`phase`: idle, tuning, song, rj, waiting, recovering). Play/pause goes through one path. Don't add parallel timers.
 - **RJ script generation:** `llmScript()` in `src/lib/script.ts`, called by `/api/segment`. All text shown or spoken must pass `stripTags()`. Full breaks run a show segment (`SegmentType`: story, trivia_q/trivia_a, hot_take, callback, dedication, vibe) chosen by `nextSegment()` in `live/page.tsx` and checked by `segmentFor()`; a trivia question's answer comes back on a hidden `ANSWER:` line (`splitAnswer()`), is held client-side and revealed at the next break. Breaks get the session's played songs (`history`).
 - **Transitions:** where we control song volume (desktop Spotify SDK, YouTube off iOS) the RJ talks over the outro and the next intro (`outroLeadMs()`), fades go through `fadeSdk()` (newest fade wins; never set volume directly) and `volumeGuard()` restores a song left ducked. Phone Spotify (Connect) and iOS YouTube can't duck: tight cuts, the next song is queued on the device (`startOn(..., after)`) and adopted if Spotify moved on by itself while the page was frozen.
-- **TTS:** `/api/tts` tries the chosen provider then the other, else the client falls back to browser `speechSynthesis`.
+- **TTS:** `/api/tts` tries the chosen voice's provider, then the rest in order (Gemini, own server, Azure, ElevenLabs); on a 502 the client speaks with the device voice (`src/lib/browserVoice.ts`) and rests the neural voice for a while after `quota_exceeded`. Voice id `auto` = server decides, `browser` = always the device voice.
+- **Public API routes** start with `guard(req, name, limit)` from `src/lib/guard.ts` and read bodies with `readJson()`. Keep both on any new route, and never return upstream error bodies to the client.
+- **Languages:** adding one means `Language` + `LANGUAGES` + `SPEECH_LANG` in `prefs.ts`, the `K` tables in `script.ts`, `LANG_RULES`/`persona()`, and `LOCALE` in `news.ts`. Spanish is the worked example.
 - **YouTube:** `YtCurator.ok()` filters candidates (language, length, `looksLikeSong`); server `details()` drops non-embeddable, age-restricted, live and compilation videos.
 
 ## Common failure modes
@@ -149,5 +159,6 @@ Key behaviours to know before editing:
 ## When you change code
 
 - Run `npm run build` and `npm run e2e`; add or update a spec in `tests/e2e/` for behaviour changes.
-- Keep the visual style minimal and dark (warm off-white `#f3efe8` on `#0a0908`), respect `prefers-reduced-motion`, and keep the live screen usable at 360×740.
+- Keep the visual style dark and warm (off-white `#f3efe8` on `#0a0908`, mode tint from `--tint-a/--tint-b`), use the shared `.glass*` classes, animate only `transform`/`opacity`, respect `prefers-reduced-motion`, and keep the live screen usable at 320×568 and 360×740.
+- This sandbox-friendly test run: `PW_CHROME=/usr/bin/google-chrome npx playwright test --workers=2` (timing tests assume an unloaded machine; rerun a failing file alone before assuming a regression).
 - Small, clean commits; normal pushes only.
